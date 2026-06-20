@@ -33,63 +33,88 @@ uv pip install -e .
 
 Requires Python 3.11+. AWS enrichment requires `boto3` (included) and valid AWS credentials.
 
-## Usage
-
-### Generate a report from Infracost JSON
+## Typical workflow
 
 ```bash
-# Run infracost as usual
+# 1. Generate infracost JSON (requires Infracost CLI + INFRACOST_API_KEY)
 infracost breakdown --path . --format json --out-file infracost.json
 
-# Generate the rich HTML report
-bucksawz report --input infracost.json --output report.html
-```
-
-### Generate a report from an existing Infracost HTML report
-
-If you only have the HTML output (not the original JSON):
-
-```bash
-bucksawz from-html infracost_report.html --output report.html
-```
-
-### Enrich with AWS Cost Explorer actuals
-
-```bash
+# 2. Enrich with real AWS billing data (Cost Explorer + CloudWatch)
+#    Pulls 90 days of actuals, estimates usage-based costs, caches for 7 days.
+#    Run from your management/payer account to get a per-member-account breakdown.
 bucksawz enrich \
   --input infracost.json \
   --output enriched.json \
   --aws-profile my-profile \
   --lookback-days 90
 
-# Then generate the report from enriched data
+# 3. Generate the interactive HTML report
 bucksawz report --input enriched.json --output report.html
+open report.html
 ```
 
-Results are cached in `~/.cache/bucksawz/` for 7 days. Override with:
+`enrich` is optional — `bucksawz report --input infracost.json` works without AWS
+credentials and produces the same HTML minus the historical actuals and estimates.
+
+### Starting from an existing HTML report (no JSON)
 
 ```bash
---cache-ttl 14          # extend to 14 days
---force-refresh         # bypass cache for this run
+# Re-render a better report from an old infracost HTML export
+bucksawz from-html infracost_report.html --output report.html
+
+# Or extract the JSON first for further processing
+bucksawz html-to-json infracost_report.html --output infracost.json
+```
+
+## Usage reference
+
+### `report` — generate HTML from infracost JSON
+
+```bash
+bucksawz report --input infracost.json --output report.html
+# Also accepts enriched.json; cost estimates are shown automatically if present
+```
+
+### `enrich` — pull AWS Cost Explorer + CloudWatch actuals
+
+```bash
+bucksawz enrich \
+  --input infracost.json \
+  --output enriched.json \
+  --aws-profile my-profile \
+  --aws-region us-east-1 \   # Cost Explorer region (always us-east-1 for global CE)
+  --lookback-days 90 \
+  --cache-ttl 7 \
+  --force-refresh \           # bypass cache for this run
+  --no-cloudwatch             # skip CloudWatch metric enrichment
+```
+
+When run from an AWS Organizations management account, per-member-account cost
+breakdowns appear automatically in the report — no extra flags needed.
+
+### `prices` — local AWS Pricing API cache
+
+```bash
+# Pre-fetch prices for key services (requires pricing:GetProducts)
+bucksawz prices update \
+  --services ECS,Lambda,EC2,RDS \
+  --regions us-east-1,eu-west-2,ap-southeast-2 \
+  --aws-profile my-profile
+
+bucksawz prices info   # show DB location and row counts
 ```
 
 ### Cache management
 
 ```bash
-bucksawz cache info        # show cached entries and their age
+bucksawz cache info        # show Cost Explorer / CloudWatch cache entries and age
 bucksawz cache clear       # remove expired entries
 bucksawz cache clear --all # wipe everything
 ```
 
-### Convert HTML report to JSON
-
-```bash
-bucksawz html-to-json infracost_report.html --output infracost.json
-```
-
 ## AWS permissions required
 
-The `enrich` command uses read-only Cost Explorer APIs:
+### `enrich` (Cost Explorer + CloudWatch)
 
 ```json
 {
@@ -97,8 +122,28 @@ The `enrich` command uses read-only Cost Explorer APIs:
   "Action": [
     "ce:GetCostAndUsage",
     "ce:GetCostForecast",
-    "ce:GetReservationUtilization",
-    "ce:GetSavingsPlansUtilization"
+    "cloudwatch:GetMetricStatistics",
+    "elasticloadbalancing:DescribeLoadBalancers"
+  ],
+  "Resource": "*"
+}
+```
+
+`elasticloadbalancing:DescribeLoadBalancers` is needed to resolve ALB/NLB CloudWatch
+dimension values (the ARN suffix, not the name). It is only called when ALB/NLB
+resources are present in the infracost JSON. Use `--no-cloudwatch` to skip it.
+
+For per-account breakdowns, run `enrich` with credentials that have
+`ce:GetCostAndUsage` in the management/payer account. No extra permissions needed —
+the LINKED_ACCOUNT dimension is returned automatically.
+
+### `prices update` (AWS Pricing API)
+
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "pricing:GetProducts"
   ],
   "Resource": "*"
 }
@@ -116,10 +161,16 @@ Infracost itself is also Apache 2.0. bucksawz aims to be a drop-in replacement f
 
 ## Roadmap
 
-- [ ] Phase 2 complete: CloudWatch metric enrichment for usage-based resources (ALB LCU, Lambda invocations, SQS messages)
-- [ ] Phase 3: Replace `cloud.infracost.io` with direct AWS Pricing API — starting with EC2, ELB, RDS, ECS, S3
-- [ ] Multi-account Cost Explorer support
-- [ ] GitHub Actions integration (post report as PR comment)
+- [x] Rich HTML report with sidebar ToC, charts, collapsible sections, search
+- [x] CloudWatch enrichment for usage-based costs (ALB LCU, Lambda, SQS, API Gateway)
+- [x] AWS Pricing API price cache (`bucksawz prices update`) for ECS/Fargate, Lambda, EC2, RDS
+- [x] Usage-based cost estimation: CloudWatch actuals × unit price → `~$X.XX/mo`
+- [x] Per-account breakdown for AWS Organizations / consolidated billing
+- [x] GitHub Actions workflow (PR comment with cost summary + artifact link)
+- [ ] Standalone pricing engine: estimate costs directly from Terraform plan JSON without Infracost
+- [ ] ELB/ALB/NLB pricing in the price cache (currently only in the estimator via infracost unit prices)
+- [ ] Multi-region enrichment (currently one CE region per `enrich` run)
+- [ ] Account alias resolution (show account names alongside IDs)
 
 ## License
 
