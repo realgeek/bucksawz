@@ -20,3 +20,6 @@ bucksawz = "bucksawz.cli:cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["bucksawz"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
