@@ -2,13 +2,19 @@
 AWS Cost Explorer enrichment.
 Pulls GetCostAndUsage for the lookback window and merges actuals into
 the infracost output, filling in usage-based cost estimates.
+
+Results are cached locally for 7 days (configurable via --cache-ttl).
+Cache lives in ~/.cache/bucksawz/. Override with $BUCKSAWZ_CACHE_DIR.
 """
 from __future__ import annotations
 import json
 from datetime import date, timedelta
 from typing import Optional
 import boto3
-from ..schema.infracost import InfracostOutput, Project, Resource
+from ..schema.infracost import InfracostOutput, Resource
+from .cache import get as cache_get, put as cache_put, cache_key
+
+_DEFAULT_TTL_DAYS = 7
 
 
 def _ce_client(profile: Optional[str], region: str):
@@ -22,8 +28,22 @@ def _date_range(lookback_days: int) -> tuple[str, str]:
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
-def _get_actuals_by_service(ce, start: str, end: str) -> dict[str, float]:
-    """Total spend by AWS service for the lookback period."""
+def _get_actuals_by_service(
+    ce,
+    start: str,
+    end: str,
+    profile: Optional[str],
+    region: str,
+    ttl_days: int,
+) -> dict[str, float]:
+    """Total spend by AWS service for the lookback period, cached."""
+    key = cache_key("ce_actuals_by_service", profile or "default", region, start, end)
+    cached = cache_get(key, ttl_days=ttl_days)
+    if cached is not None:
+        print(f"  [cache hit] actuals_by_service ({start}→{end})")
+        return cached
+
+    print(f"  [aws] fetching Cost Explorer actuals ({start}→{end})…")
     resp = ce.get_cost_and_usage(
         TimePeriod={"Start": start, "End": end},
         Granularity="MONTHLY",
@@ -36,23 +56,39 @@ def _get_actuals_by_service(ce, start: str, end: str) -> dict[str, float]:
             service = group["Keys"][0]
             amount = float(group["Metrics"]["UnblendedCost"]["Amount"])
             totals[service] = totals.get(service, 0.0) + amount
+
+    cache_put(key, totals)
     return totals
 
 
-def _get_forecast(ce, end: str, currency: str = "USD") -> Optional[float]:
-    """30-day forward cost forecast from today."""
+def _get_forecast(
+    ce,
+    profile: Optional[str],
+    region: str,
+    ttl_days: int,
+) -> Optional[float]:
+    """30-day forward cost forecast from today, cached."""
     today = date.today()
     forecast_end = today + timedelta(days=30)
+    start_str = today.strftime("%Y-%m-%d")
+    end_str = forecast_end.strftime("%Y-%m-%d")
+
+    key = cache_key("ce_forecast", profile or "default", region, start_str, end_str)
+    cached = cache_get(key, ttl_days=ttl_days)
+    if cached is not None:
+        print(f"  [cache hit] forecast")
+        return cached
+
+    print(f"  [aws] fetching cost forecast…")
     try:
         resp = ce.get_cost_forecast(
-            TimePeriod={
-                "Start": today.strftime("%Y-%m-%d"),
-                "End": forecast_end.strftime("%Y-%m-%d"),
-            },
+            TimePeriod={"Start": start_str, "End": end_str},
             Metric="UNBLENDED_COST",
             Granularity="MONTHLY",
         )
-        return float(resp["Total"]["Amount"])
+        result = float(resp["Total"]["Amount"])
+        cache_put(key, result)
+        return result
     except Exception:
         return None
 
@@ -62,16 +98,33 @@ def enrich_output(
     lookback_days: int = 90,
     profile: Optional[str] = None,
     region: str = "us-east-1",
+    cache_ttl_days: int = _DEFAULT_TTL_DAYS,
+    force_refresh: bool = False,
 ) -> dict:
     """
     Returns a dict (JSON-serialisable) that extends the infracost output
     with a top-level 'historical' key containing Cost Explorer actuals.
+
+    Results are cached for cache_ttl_days (default 7). Pass force_refresh=True
+    to bypass the cache and re-fetch from AWS.
     """
+    if force_refresh:
+        # Invalidate relevant cache entries before fetching
+        from .cache import invalidate
+        start, end = _date_range(lookback_days)
+        invalidate(cache_key("ce_actuals_by_service", profile or "default", region, start, end))
+        today = date.today()
+        invalidate(cache_key("ce_forecast", profile or "default", region,
+                             today.strftime("%Y-%m-%d"),
+                             (today + timedelta(days=30)).strftime("%Y-%m-%d")))
+
     ce = _ce_client(profile, region)
     start, end = _date_range(lookback_days)
 
-    actuals_by_service = _get_actuals_by_service(ce, start, end)
-    forecast = _get_forecast(ce, end, output.currency)
+    actuals_by_service = _get_actuals_by_service(
+        ce, start, end, profile, region, cache_ttl_days
+    )
+    forecast = _get_forecast(ce, profile, region, cache_ttl_days)
 
     months = max(lookback_days / 30, 1)
     monthly_actuals = {k: v / months for k, v in actuals_by_service.items()}
@@ -88,6 +141,7 @@ def enrich_output(
             "actualsByService": actuals_by_service,
             "monthlyAverageByService": monthly_actuals,
             "forecastNextMonth": forecast,
+            "cacheTtlDays": cache_ttl_days,
         },
         "projects": [],
     }
@@ -107,31 +161,30 @@ def enrich_output(
     return result
 
 
+_SVC_MAP = {
+    "EC2": "Amazon Elastic Compute Cloud - Compute",
+    "ELB": "Amazon Elastic Load Balancing",
+    "RDS": "Amazon Relational Database Service",
+    "S3": "Amazon Simple Storage Service",
+    "Lambda": "AWS Lambda",
+    "CloudFront": "Amazon CloudFront",
+    "Route 53": "Amazon Route 53",
+    "SQS": "Amazon Simple Queue Service",
+    "SNS": "Amazon Simple Notification Service",
+    "ElastiCache": "Amazon ElastiCache",
+    "CloudWatch": "Amazon CloudWatch",
+    "NAT Gateway": "Amazon Virtual Private Cloud",
+    "EBS": "Amazon Elastic Block Store",
+    "Secrets/SSM": "AWS Secrets Manager",
+    "API Gateway": "Amazon API Gateway",
+    "ECS/ECR": "Amazon Elastic Container Service",
+}
+
+
 def _enrich_resource(resource: Resource, actuals_by_service: dict[str, float]) -> dict:
-    """Match a resource to its service actuals and annotate."""
     svc = resource.aws_service()
-    # Map our service label back to AWS service name heuristic
-    _SVC_MAP = {
-        "EC2": "Amazon Elastic Compute Cloud - Compute",
-        "ELB": "Amazon Elastic Load Balancing",
-        "RDS": "Amazon Relational Database Service",
-        "S3": "Amazon Simple Storage Service",
-        "Lambda": "AWS Lambda",
-        "CloudFront": "Amazon CloudFront",
-        "Route 53": "Amazon Route 53",
-        "SQS": "Amazon Simple Queue Service",
-        "SNS": "Amazon Simple Notification Service",
-        "ElastiCache": "Amazon ElastiCache",
-        "CloudWatch": "Amazon CloudWatch",
-        "NAT Gateway": "Amazon Virtual Private Cloud",
-        "EBS": "Amazon Elastic Block Store",
-        "Secrets/SSM": "AWS Secrets Manager",
-        "API Gateway": "Amazon API Gateway",
-    }
     aws_svc_name = _SVC_MAP.get(svc)
-    actual_monthly = None
-    if aws_svc_name:
-        actual_monthly = actuals_by_service.get(aws_svc_name)
+    actual_monthly = actuals_by_service.get(aws_svc_name) if aws_svc_name else None
 
     return {
         "name": resource.name,
