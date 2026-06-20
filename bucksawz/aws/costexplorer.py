@@ -167,6 +167,19 @@ def enrich_output(
         if cw_actuals:
             print(f"  [cloudwatch] enriched {len(cw_actuals)} resources")
 
+    # Usage-based cost estimates (CW actuals × unit price from infracost JSON)
+    estimates: dict[str, float] = {}
+    if cw_actuals:
+        from ..pricing.estimator import estimate_all
+        all_resources = [
+            r
+            for p in output.projects if p.breakdown
+            for r in p.breakdown.resources
+        ]
+        estimates = estimate_all(all_resources, cw_actuals, lookback_days)
+        if estimates:
+            print(f"  [estimate] computed estimates for {len(estimates)} resources")
+
     for p in output.projects:
         proj_dict = {
             "name": p.name,
@@ -177,7 +190,7 @@ def enrich_output(
         if p.breakdown:
             for r in p.breakdown.resources:
                 proj_dict["resources"].append(
-                    _enrich_resource(r, monthly_actuals, cw_actuals)
+                    _enrich_resource(r, monthly_actuals, cw_actuals, estimates)
                 )
         result["projects"].append(proj_dict)
 
@@ -208,11 +221,13 @@ def _enrich_resource(
     resource: Resource,
     actuals_by_service: dict[str, float],
     cw_actuals: dict[str, dict] | None = None,
+    estimates: dict[str, float] | None = None,
 ) -> dict:
     svc = resource.aws_service()
     aws_svc_name = _SVC_MAP.get(svc)
     actual_monthly = actuals_by_service.get(aws_svc_name) if aws_svc_name else None
     cw = (cw_actuals or {}).get(resource.name, {})
+    estimated_cost = (estimates or {}).get(resource.name)
 
     return {
         "name": resource.name,
@@ -220,6 +235,7 @@ def _enrich_resource(
         "tags": resource.tags,
         "monthlyCost": resource.total_monthly_cost(),
         "awsService": svc,
+        "estimatedMonthlyCost": estimated_cost,
         "historical": {
             "actualMonthlyServiceTotal": actual_monthly,
             "cloudwatchActuals": cw or None,

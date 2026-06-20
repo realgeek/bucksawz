@@ -371,6 +371,7 @@ tr.project-total td {
       <thead>
         <tr>
           <th>Project</th><th>Resource</th><th>Component</th><th>Unit price</th><th>Per</th>
+          {% if has_estimates %}<th title="Estimated from CloudWatch actuals">Est. monthly</th>{% endif %}
         </tr>
       </thead>
       <tbody>
@@ -381,10 +382,20 @@ tr.project-total td {
           <td>{{ u.component }}</td>
           <td>${{ "%.4f" | format(u.price) }}</td>
           <td>{{ u.unit }}</td>
+          {% if has_estimates %}
+          <td style="font-style:italic;color:#6b7280;">
+            {% if u.estimated_cost is not none %}~${{ "%.2f" | format(u.estimated_cost) }}{% else %}—{% endif %}
+          </td>
+          {% endif %}
         </tr>
         {% endfor %}
       </tbody>
     </table>
+    {% if has_estimates %}
+    <p style="font-size:0.75rem;color:#6b7280;margin-top:0.5rem;">
+      ~ Estimated from CloudWatch actuals × unit price. Treat as indicative, not billed.
+    </p>
+    {% endif %}
   </div>
   {% endif %}
 

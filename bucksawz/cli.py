@@ -1,7 +1,24 @@
 import click
+import json
 from .report.render import render
 from .schema.infracost import InfracostOutput
 from .schema.html_parser import parse_html
+
+
+def _load_estimates(path: str) -> dict[str, float] | None:
+    """Extract estimatedMonthlyCost entries from an enriched JSON file, if present."""
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        estimates = {}
+        for p in data.get("projects", []):
+            for r in p.get("resources", []):
+                est = r.get("estimatedMonthlyCost")
+                if est is not None:
+                    estimates[r["name"]] = float(est)
+        return estimates or None
+    except Exception:
+        return None
 
 
 @click.group()
@@ -14,9 +31,14 @@ def cli():
 @click.option("--input", "-i", "input_path", required=True, help="Path to infracost JSON output")
 @click.option("--output", "-o", "output_path", default="report.html", show_default=True, help="Output HTML path")
 def report(input_path, output_path):
-    """Generate a rich HTML cost report from infracost JSON output."""
+    """Generate a rich HTML cost report from infracost JSON output.
+
+    If the input is an enriched JSON (produced by `bucksawz enrich`), cost
+    estimates from CloudWatch actuals are automatically shown in the report.
+    """
     output = InfracostOutput.from_file(input_path)
-    render(output, output_path)
+    estimates = _load_estimates(input_path)
+    render(output, output_path, estimates=estimates)
 
 
 @cli.command()
@@ -94,6 +116,58 @@ def cache_info():
             click.echo(f"  {p.name}  age={age.days}d  key={env.get('key','?')[:60]}")
         except Exception:
             click.echo(f"  {p.name}  (unreadable)")
+
+
+@cli.group()
+def prices():
+    """Manage the local AWS Pricing API cache (~/.cache/bucksawz/prices.db)."""
+    pass
+
+
+@prices.command("update")
+@click.option(
+    "--services", "-s", default=",".join(["ECS", "Lambda", "EC2", "RDS"]),
+    show_default=True,
+    help="Comma-separated list of services to update (ECS, Lambda, EC2, RDS).",
+)
+@click.option(
+    "--regions", "-r", default="us-east-1",
+    show_default=True,
+    help="Comma-separated list of AWS regions to fetch prices for.",
+)
+@click.option("--aws-profile", default=None, help="AWS profile name.")
+def prices_update(services, regions, aws_profile):
+    """Fetch current AWS prices and store them in the local SQLite price cache.
+
+    Requires pricing:GetProducts IAM permission.
+    Prices are fetched from the AWS Pricing API (global endpoint, us-east-1).
+    """
+    from .pricing.fetcher import fetch_all, ALL_SERVICES
+    svc_list = [s.strip() for s in services.split(",") if s.strip()]
+    region_list = [r.strip() for r in regions.split(",") if r.strip()]
+    click.echo(f"Fetching prices for services: {', '.join(svc_list)}")
+    click.echo(f"Regions: {', '.join(region_list)}")
+    totals = fetch_all(region_list, svc_list, profile=aws_profile)
+    click.echo("\nDone.")
+    for svc, n in totals.items():
+        click.echo(f"  {svc}: {n} price records stored")
+
+
+@prices.command("info")
+def prices_info():
+    """Show price DB location and row counts per service/region."""
+    from .pricing.db import db_path, count, service_summary
+    p = db_path()
+    click.echo(f"Price DB: {p}")
+    if not p.exists():
+        click.echo("  (empty — run `bucksawz prices update` to populate)")
+        return
+    click.echo(f"Total rows: {count()}")
+    for row in service_summary():
+        click.echo(
+            f"  {row['service']:<20} {row['region']:<16} {row['rows']:>5} rows  "
+            f"last fetched: {row['last_fetched'][:19]}"
+        )
 
 
 @cli.command("from-html")

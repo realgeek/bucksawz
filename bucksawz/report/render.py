@@ -50,12 +50,16 @@ def _top_resources(projects: list[Project], n: int = 10) -> list[dict]:
     return items[:n]
 
 
-def _usage_based_items(projects: list[Project]) -> list[dict]:
+def _usage_based_items(
+    projects: list[Project],
+    estimates: Optional[dict[str, float]] = None,
+) -> list[dict]:
     items = []
     for p in projects:
         if not p.breakdown:
             continue
         for r in p.breakdown.resources:
+            est = (estimates or {}).get(r.name)
             for c in r.cost_components:
                 if c.usage_based and c.price is not None:
                     items.append({
@@ -64,6 +68,7 @@ def _usage_based_items(projects: list[Project]) -> list[dict]:
                         "component": c.name,
                         "unit": c.unit,
                         "price": c.price,
+                        "estimated_cost": est,
                     })
             for sub in r.sub_resources:
                 for c in sub.cost_components:
@@ -74,6 +79,7 @@ def _usage_based_items(projects: list[Project]) -> list[dict]:
                             "component": c.name,
                             "unit": c.unit,
                             "price": c.price,
+                            "estimated_cost": None,
                         })
     return items
 
@@ -133,7 +139,11 @@ def _resource_rows(resource: Resource, depth: int = 0) -> list[dict]:
     return rows
 
 
-def render(output: InfracostOutput, dest: str) -> None:
+def render(
+    output: InfracostOutput,
+    dest: str,
+    estimates: Optional[dict[str, float]] = None,
+) -> None:
     env = Environment(
         loader=FileSystemLoader(str(Path(__file__).parent)),
         autoescape=select_autoescape(["html"]),
@@ -142,7 +152,7 @@ def render(output: InfracostOutput, dest: str) -> None:
 
     svc_breakdown = _service_breakdown(output.projects)
     top_resources = _top_resources(output.projects)
-    usage_based = _usage_based_items(output.projects)
+    usage_based = _usage_based_items(output.projects, estimates)
 
     projects_data = []
     for p in output.projects:
@@ -172,6 +182,7 @@ def render(output: InfracostOutput, dest: str) -> None:
         svc_breakdown_json=json.dumps(svc_breakdown),
         top_resources=top_resources,
         usage_based=usage_based,
+        has_estimates=bool(estimates),
         project_costs_json=json.dumps({
             p["name"]: p["monthly_cost"] for p in projects_data
         }),
