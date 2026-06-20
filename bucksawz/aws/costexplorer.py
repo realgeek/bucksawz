@@ -28,37 +28,65 @@ def _date_range(lookback_days: int) -> tuple[str, str]:
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
-def _get_actuals_by_service(
+def _get_actuals_by_account_service(
     ce,
     start: str,
     end: str,
     profile: Optional[str],
     region: str,
     ttl_days: int,
-) -> dict[str, float]:
-    """Total spend by AWS service for the lookback period, cached."""
-    key = cache_key("ce_actuals_by_service", profile or "default", region, start, end)
+) -> dict[str, dict[str, float]]:
+    """
+    Total spend grouped by (LINKED_ACCOUNT, SERVICE) for the lookback period.
+    Returns {account_id: {service_name: total_cost}}.
+
+    When called from a management/payer account this includes all member accounts.
+    Single-account callers get a one-entry dict keyed by their own account ID.
+    Results are cached for ttl_days.
+    """
+    key = cache_key("ce_actuals_by_account_service", profile or "default", region, start, end)
     cached = cache_get(key, ttl_days=ttl_days)
     if cached is not None:
-        print(f"  [cache hit] actuals_by_service ({start}→{end})")
+        print(f"  [cache hit] actuals_by_account_service ({start}→{end})")
         return cached
 
-    print(f"  [aws] fetching Cost Explorer actuals ({start}→{end})…")
-    resp = ce.get_cost_and_usage(
+    print(f"  [aws] fetching Cost Explorer actuals by account+service ({start}→{end})…")
+    by_account: dict[str, dict[str, float]] = {}
+    paginator = ce.get_paginator("get_cost_and_usage")
+    for page in paginator.paginate(
         TimePeriod={"Start": start, "End": end},
         Granularity="MONTHLY",
         Metrics=["UnblendedCost"],
-        GroupBy=[{"Type": "DIMENSION", "Key": "SERVICE"}],
-    )
-    totals: dict[str, float] = {}
-    for result in resp.get("ResultsByTime", []):
-        for group in result.get("Groups", []):
-            service = group["Keys"][0]
-            amount = float(group["Metrics"]["UnblendedCost"]["Amount"])
-            totals[service] = totals.get(service, 0.0) + amount
+        GroupBy=[
+            {"Type": "DIMENSION", "Key": "LINKED_ACCOUNT"},
+            {"Type": "DIMENSION", "Key": "SERVICE"},
+        ],
+    ):
+        for period in page.get("ResultsByTime", []):
+            for group in period.get("Groups", []):
+                account_id, service = group["Keys"]
+                amount = float(group["Metrics"]["UnblendedCost"]["Amount"])
+                by_account.setdefault(account_id, {})
+                by_account[account_id][service] = (
+                    by_account[account_id].get(service, 0.0) + amount
+                )
 
-    cache_put(key, totals)
+    cache_put(key, by_account)
+    return by_account
+
+
+def _aggregate_by_service(by_account: dict[str, dict[str, float]]) -> dict[str, float]:
+    """Collapse the account×service matrix to a single by-service total."""
+    totals: dict[str, float] = {}
+    for svc_map in by_account.values():
+        for svc, cost in svc_map.items():
+            totals[svc] = totals.get(svc, 0.0) + cost
     return totals
+
+
+def _account_totals(by_account: dict[str, dict[str, float]]) -> dict[str, float]:
+    """Collapse the account×service matrix to a total per account."""
+    return {acct: sum(svcs.values()) for acct, svcs in by_account.items()}
 
 
 def _get_forecast(
@@ -110,10 +138,9 @@ def enrich_output(
     to bypass the cache and re-fetch from AWS.
     """
     if force_refresh:
-        # Invalidate relevant cache entries before fetching
         from .cache import invalidate
         start, end = _date_range(lookback_days)
-        invalidate(cache_key("ce_actuals_by_service", profile or "default", region, start, end))
+        invalidate(cache_key("ce_actuals_by_account_service", profile or "default", region, start, end))
         today = date.today()
         invalidate(cache_key("ce_forecast", profile or "default", region,
                              today.strftime("%Y-%m-%d"),
@@ -122,13 +149,20 @@ def enrich_output(
     ce = _ce_client(profile, region)
     start, end = _date_range(lookback_days)
 
-    actuals_by_service = _get_actuals_by_service(
+    by_account_service = _get_actuals_by_account_service(
         ce, start, end, profile, region, cache_ttl_days
     )
+    actuals_by_service = _aggregate_by_service(by_account_service)
+    actuals_by_account = _account_totals(by_account_service)
+
     forecast = _get_forecast(ce, profile, region, cache_ttl_days)
 
     months = max(lookback_days / 30, 1)
     monthly_actuals = {k: v / months for k, v in actuals_by_service.items()}
+    monthly_by_account = {a: v / months for a, v in actuals_by_account.items()}
+
+    if len(actuals_by_account) > 1:
+        print(f"  [aws] {len(actuals_by_account)} accounts detected in consolidated billing")
 
     result = {
         "version": output.version,
@@ -139,8 +173,12 @@ def enrich_output(
             "lookbackDays": lookback_days,
             "start": start,
             "end": end,
+            "accounts": sorted(by_account_service.keys()),
             "actualsByService": actuals_by_service,
             "monthlyAverageByService": monthly_actuals,
+            "actualsByAccount": actuals_by_account,
+            "monthlyAverageByAccount": monthly_by_account,
+            "actualsByAccountService": by_account_service,
             "forecastNextMonth": forecast,
             "cacheTtlDays": cache_ttl_days,
         },

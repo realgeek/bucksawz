@@ -5,20 +5,27 @@ from .schema.infracost import InfracostOutput
 from .schema.html_parser import parse_html
 
 
-def _load_estimates(path: str) -> dict[str, float] | None:
-    """Extract estimatedMonthlyCost entries from an enriched JSON file, if present."""
+def _load_enrichment(path: str) -> tuple[dict[str, float] | None, dict[str, float] | None]:
+    """
+    Extract estimates and account breakdown from an enriched JSON file.
+    Returns (estimates, account_breakdown) — either may be None if absent.
+    estimates: {resource_name: estimated_monthly_cost}
+    account_breakdown: {account_id: monthly_average_cost}
+    """
     try:
         with open(path) as f:
             data = json.load(f)
-        estimates = {}
+        estimates: dict[str, float] = {}
         for p in data.get("projects", []):
             for r in p.get("resources", []):
                 est = r.get("estimatedMonthlyCost")
                 if est is not None:
                     estimates[r["name"]] = float(est)
-        return estimates or None
+        hist = data.get("historical", {})
+        account_breakdown: dict[str, float] = hist.get("monthlyAverageByAccount", {})
+        return estimates or None, account_breakdown or None
     except Exception:
-        return None
+        return None, None
 
 
 @click.group()
@@ -37,8 +44,8 @@ def report(input_path, output_path):
     estimates from CloudWatch actuals are automatically shown in the report.
     """
     output = InfracostOutput.from_file(input_path)
-    estimates = _load_estimates(input_path)
-    render(output, output_path, estimates=estimates)
+    estimates, account_breakdown = _load_enrichment(input_path)
+    render(output, output_path, estimates=estimates, account_breakdown=account_breakdown)
 
 
 @cli.command()

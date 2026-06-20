@@ -143,6 +143,7 @@ def render(
     output: InfracostOutput,
     dest: str,
     estimates: Optional[dict[str, float]] = None,
+    account_breakdown: Optional[dict[str, float]] = None,
 ) -> None:
     env = Environment(
         loader=FileSystemLoader(str(Path(__file__).parent)),
@@ -172,6 +173,12 @@ def render(
 
     chartjs = (_ASSETS / "chart.min.js").read_text(encoding="utf-8")
 
+    # Sort accounts by total cost descending for display
+    sorted_accounts = (
+        dict(sorted(account_breakdown.items(), key=lambda x: -x[1]))
+        if account_breakdown else {}
+    )
+
     tpl = env.get_template("template.html")
     html = tpl.render(
         output=output,
@@ -183,6 +190,8 @@ def render(
         top_resources=top_resources,
         usage_based=usage_based,
         has_estimates=bool(estimates),
+        account_breakdown=sorted_accounts,
+        account_breakdown_json=json.dumps(sorted_accounts),
         project_costs_json=json.dumps({
             p["name"]: p["monthly_cost"] for p in projects_data
         }),

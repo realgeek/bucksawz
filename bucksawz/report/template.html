@@ -277,6 +277,9 @@ tr.project-total td {
   <div class="section-head">Navigation</div>
   <ul>
     <li><a href="#summary">Summary</a></li>
+    {% if account_breakdown | length > 1 %}
+    <li><a href="#accounts">AWS accounts ({{ account_breakdown | length }})</a></li>
+    {% endif %}
     <li><a href="#top-resources">Top resources</a></li>
     <li><a href="#usage-based">Usage-based costs</a></li>
     <li><a href="#all-projects">All projects</a></li>
@@ -322,6 +325,12 @@ tr.project-total td {
       <div class="label">Projects</div>
       <div class="value">{{ projects | length }}</div>
     </div>
+    {% if account_breakdown | length > 1 %}
+    <div class="card blue">
+      <div class="label">AWS accounts</div>
+      <div class="value">{{ account_breakdown | length }}</div>
+    </div>
+    {% endif %}
   </div>
 
   <!-- Charts -->
@@ -335,6 +344,39 @@ tr.project-total td {
       <canvas id="donutChart" height="260"></canvas>
     </div>
   </div>
+
+  <!-- Per-account breakdown (Org / consolidated billing only) -->
+  {% if account_breakdown | length > 1 %}
+  <a id="accounts"></a>
+  <div class="section-box">
+    <h3>Cost by AWS account ({{ account_breakdown | length }} accounts — monthly average over lookback period)</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Account ID</th>
+          <th style="text-align:right">Monthly average</th>
+          <th style="text-align:right">Share</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% set acct_total = account_breakdown.values() | sum %}
+        {% for account_id, cost in account_breakdown.items() %}
+        <tr>
+          <td style="font-family:monospace">{{ account_id }}</td>
+          <td class="cost">{{ cost | fmt_cost }}</td>
+          <td style="text-align:right;color:#6b7280;">
+            {{ "%.1f" | format(cost / acct_total * 100 if acct_total > 0 else 0) }}%
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p style="font-size:0.75rem;color:#6b7280;margin-top:0.5rem;">
+      Monthly averages derived from AWS Cost Explorer consolidated billing.
+      Costs are attributed to the account that incurred them.
+    </p>
+  </div>
+  {% endif %}
 
   <!-- Top resources -->
   <a id="top-resources"></a>

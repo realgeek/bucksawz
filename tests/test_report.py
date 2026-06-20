@@ -117,3 +117,39 @@ def test_html_no_price_resource_not_in_top(output):
 def test_html_subresource_rendered(report_html):
     assert "root_block_device" in report_html
     assert "Storage (gp3)" in report_html
+
+
+def test_html_single_account_no_account_section(report_html):
+    """No account breakdown section when account_breakdown is absent (default)."""
+    assert "Cost by AWS account" not in report_html
+    assert "AWS accounts" not in report_html
+
+
+def test_html_multi_account_section(output, tmp_path):
+    """Account breakdown section rendered when multiple accounts are present."""
+    dest = str(tmp_path / "multi_acct.html")
+    render(output, dest, account_breakdown={
+        "123456789012": 120.00,
+        "234567890123": 30.57,
+    })
+    html = (tmp_path / "multi_acct.html").read_text()
+    assert "AWS accounts (2)" in html
+    assert "Cost by AWS account" in html
+    assert "123456789012" in html
+    assert "234567890123" in html
+    # Share percentages sum to 100%
+    assert "%" in html
+
+
+def test_html_estimates_with_accounts(output, tmp_path):
+    """estimates and account_breakdown can coexist."""
+    dest = str(tmp_path / "est_acct.html")
+    render(
+        output, dest,
+        estimates={"aws_lb.main": 24.53},
+        account_breakdown={"111111111111": 120.00, "222222222222": 30.57},
+    )
+    html = (tmp_path / "est_acct.html").read_text()
+    assert "~$24.53" in html
+    assert "111111111111" in html
+    assert "222222222222" in html
