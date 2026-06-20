@@ -100,6 +100,7 @@ def enrich_output(
     region: str = "us-east-1",
     cache_ttl_days: int = _DEFAULT_TTL_DAYS,
     force_refresh: bool = False,
+    cloudwatch: bool = True,
 ) -> dict:
     """
     Returns a dict (JSON-serialisable) that extends the infracost output
@@ -146,6 +147,26 @@ def enrich_output(
         "projects": [],
     }
 
+    # CloudWatch usage-based enrichment
+    cw_actuals: dict[str, dict] = {}
+    if cloudwatch:
+        from .cloudwatch import enrich_with_cloudwatch
+        all_resources = [
+            r
+            for p in output.projects if p.breakdown
+            for r in p.breakdown.resources
+        ]
+        print(f"  [aws] fetching CloudWatch metrics for usage-based resources…")
+        cw_actuals = enrich_with_cloudwatch(
+            resources=all_resources,
+            profile=profile,
+            region=region,
+            lookback_days=lookback_days,
+            ttl_days=cache_ttl_days,
+        )
+        if cw_actuals:
+            print(f"  [cloudwatch] enriched {len(cw_actuals)} resources")
+
     for p in output.projects:
         proj_dict = {
             "name": p.name,
@@ -155,7 +176,9 @@ def enrich_output(
         }
         if p.breakdown:
             for r in p.breakdown.resources:
-                proj_dict["resources"].append(_enrich_resource(r, monthly_actuals))
+                proj_dict["resources"].append(
+                    _enrich_resource(r, monthly_actuals, cw_actuals)
+                )
         result["projects"].append(proj_dict)
 
     return result
@@ -181,10 +204,15 @@ _SVC_MAP = {
 }
 
 
-def _enrich_resource(resource: Resource, actuals_by_service: dict[str, float]) -> dict:
+def _enrich_resource(
+    resource: Resource,
+    actuals_by_service: dict[str, float],
+    cw_actuals: dict[str, dict] | None = None,
+) -> dict:
     svc = resource.aws_service()
     aws_svc_name = _SVC_MAP.get(svc)
     actual_monthly = actuals_by_service.get(aws_svc_name) if aws_svc_name else None
+    cw = (cw_actuals or {}).get(resource.name, {})
 
     return {
         "name": resource.name,
@@ -194,5 +222,6 @@ def _enrich_resource(resource: Resource, actuals_by_service: dict[str, float]) -
         "awsService": svc,
         "historical": {
             "actualMonthlyServiceTotal": actual_monthly,
+            "cloudwatchActuals": cw or None,
         },
     }

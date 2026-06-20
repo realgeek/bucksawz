@@ -1,0 +1,200 @@
+{
+  "version": "0.2",
+  "currency": "USD",
+  "timeGenerated": "2026-05-13T11:07:46Z",
+  "totalMonthlyCost": "150.57",
+  "totalHourlyCost": "0.206",
+  "projects": [
+    {
+      "name": "stacks-network-us-east-2",
+      "metadata": {
+        "path": "stacks/network/us-east-2",
+        "type": "terraform_dir"
+      },
+      "breakdown": {
+        "resources": [
+          {
+            "name": "aws_lb.main",
+            "resourceType": "aws_lb",
+            "tags": { "Env": "prod", "Team": "infra" },
+            "monthlyCost": "18.40",
+            "hourlyCost": "0.025",
+            "costComponents": [
+              {
+                "name": "Application load balancer",
+                "unit": "hours",
+                "hourlyQuantity": "1",
+                "monthlyQuantity": "730",
+                "price": "0.025205",
+                "hourlyCost": "0.025205",
+                "monthlyCost": "18.40"
+              },
+              {
+                "name": "Load balancer capacity units",
+                "unit": "LCU",
+                "price": "0.008",
+                "hourlyCost": null,
+                "monthlyCost": null
+              }
+            ],
+            "subresources": []
+          },
+          {
+            "name": "aws_instance.bastion",
+            "resourceType": "aws_instance",
+            "tags": { "Env": "prod" },
+            "monthlyCost": "7.59",
+            "hourlyCost": "0.0104",
+            "costComponents": [
+              {
+                "name": "Instance usage (Linux/UNIX, on-demand, t3.micro)",
+                "unit": "hours",
+                "hourlyQuantity": "1",
+                "monthlyQuantity": "730",
+                "price": "0.0104",
+                "hourlyCost": "0.0104",
+                "monthlyCost": "7.59"
+              }
+            ],
+            "subresources": [
+              {
+                "name": "root_block_device",
+                "resourceType": "",
+                "tags": {},
+                "costComponents": [
+                  {
+                    "name": "Storage (gp3)",
+                    "unit": "GB",
+                    "monthlyQuantity": "20",
+                    "price": "0.08",
+                    "monthlyCost": "1.60"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "name": "aws_route53_zone.internal",
+            "resourceType": "aws_route53_zone",
+            "tags": {},
+            "monthlyCost": "0.50",
+            "hourlyCost": "0.000685",
+            "costComponents": [
+              {
+                "name": "Hosted zone",
+                "unit": "months",
+                "monthlyQuantity": "1",
+                "price": "0.50",
+                "monthlyCost": "0.50"
+              }
+            ],
+            "subresources": []
+          },
+          {
+            "name": "aws_route53_record.api",
+            "resourceType": "aws_route53_record",
+            "tags": {},
+            "monthlyCost": null,
+            "hourlyCost": null,
+            "costComponents": [
+              {
+                "name": "Standard queries (first 1B)",
+                "unit": "1M queries",
+                "price": "0.40",
+                "monthlyCost": null
+              }
+            ],
+            "subresources": []
+          },
+          {
+            "name": "aws_s3_bucket.artifacts",
+            "resourceType": "aws_s3_bucket",
+            "tags": {},
+            "noPrice": true,
+            "costComponents": [],
+            "subresources": []
+          }
+        ],
+        "totalMonthlyCost": "27.49",
+        "totalHourlyCost": "0.0376"
+      },
+      "summary": {}
+    },
+    {
+      "name": "stacks-workloads-production-us-east-2",
+      "metadata": {
+        "path": "stacks/workloads/production/us-east-2",
+        "type": "terraform_dir"
+      },
+      "breakdown": {
+        "resources": [
+          {
+            "name": "aws_rds_cluster_instance.mysql[0]",
+            "resourceType": "aws_rds_cluster_instance",
+            "tags": { "Env": "prod" },
+            "monthlyCost": "106.58",
+            "hourlyCost": "0.146",
+            "costComponents": [
+              {
+                "name": "Database instance (db.r6g.large, multi-az)",
+                "unit": "hours",
+                "monthlyQuantity": "730",
+                "price": "0.146",
+                "monthlyCost": "106.58"
+              }
+            ],
+            "subresources": []
+          },
+          {
+            "name": "aws_sqs_queue.jobs",
+            "resourceType": "aws_sqs_queue",
+            "tags": { "Env": "prod" },
+            "monthlyCost": null,
+            "hourlyCost": null,
+            "costComponents": [
+              {
+                "name": "Requests",
+                "unit": "1M requests",
+                "price": "0.40",
+                "monthlyCost": null
+              }
+            ],
+            "subresources": []
+          },
+          {
+            "name": "aws_lambda_function.processor",
+            "resourceType": "aws_lambda_function",
+            "tags": {},
+            "monthlyCost": null,
+            "hourlyCost": null,
+            "costComponents": [
+              {
+                "name": "Requests",
+                "unit": "1M requests",
+                "price": "0.20",
+                "monthlyCost": null
+              },
+              {
+                "name": "Duration (x86)",
+                "unit": "GB-seconds",
+                "price": "0.0000166667",
+                "monthlyCost": null
+              }
+            ],
+            "subresources": []
+          }
+        ],
+        "totalMonthlyCost": "106.58",
+        "totalHourlyCost": "0.146"
+      },
+      "summary": {}
+    }
+  ],
+  "summary": {
+    "totalDetectedResources": 8,
+    "totalSupportedResources": 5,
+    "totalNoPriceResources": 1,
+    "totalUnsupportedResources": 0,
+    "unsupportedResourceCounts": {}
+  }
+}

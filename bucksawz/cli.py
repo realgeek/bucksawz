@@ -27,7 +27,8 @@ def report(input_path, output_path):
 @click.option("--aws-region", default="us-east-1", show_default=True)
 @click.option("--cache-ttl", default=7, show_default=True, help="Cache TTL in days (default 7)")
 @click.option("--force-refresh", is_flag=True, default=False, help="Bypass cache and re-fetch from AWS")
-def enrich(input_path, output_path, lookback_days, aws_profile, aws_region, cache_ttl, force_refresh):
+@click.option("--no-cloudwatch", is_flag=True, default=False, help="Skip CloudWatch metric enrichment")
+def enrich(input_path, output_path, lookback_days, aws_profile, aws_region, cache_ttl, force_refresh, no_cloudwatch):
     """Enrich infracost JSON with AWS Cost Explorer actuals.
 
     Results are cached in ~/.cache/bucksawz/ for --cache-ttl days (default 7).
@@ -43,6 +44,7 @@ def enrich(input_path, output_path, lookback_days, aws_profile, aws_region, cach
         region=aws_region,
         cache_ttl_days=cache_ttl,
         force_refresh=force_refresh,
+        cloudwatch=not no_cloudwatch,
     )
     with open(output_path, "w") as f:
         json.dump(enriched, f, indent=2)
