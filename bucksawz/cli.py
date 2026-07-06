@@ -177,6 +177,40 @@ def prices_info():
         )
 
 
+@cli.command("price-state")
+@click.option(
+    "--input", "-i", "input_path", default="-", show_default=True,
+    help="Path to `terraform show -json` output, or - for stdin",
+)
+@click.option("--output", "-o", "output_path", default="report.html", show_default=True, help="Output HTML path")
+@click.option("--region", "-r", default="us-east-1", show_default=True, help="AWS region for price lookups")
+@click.option("--json-output", "json_output_path", default=None, help="Also write the priced Infracost-style JSON here")
+def price_state(input_path, output_path, region, json_output_path):
+    """Price a terraform plan/state directly against the local price cache.
+
+    No Infracost API key required. Feed it `terraform show -json`:
+
+        terraform show -json tfplan | bucksawz price-state -o report.html
+    """
+    import sys
+    import dataclasses
+    from .pricing.tf_state import parse_json
+    from .pricing.pricer import build_output, price_resources
+
+    text = sys.stdin.read() if input_path == "-" else open(input_path).read()
+    tf_resources = parse_json(text)
+    priced = price_resources(tf_resources, region)
+    output = build_output(priced, region)
+
+    if json_output_path:
+        with open(json_output_path, "w") as f:
+            json.dump(dataclasses.asdict(output), f, indent=2, default=str)
+        click.echo(f"JSON written to {json_output_path}")
+
+    render(output, output_path)
+    click.echo(f"Priced {len(priced)} resource(s) from terraform state -> {output_path}")
+
+
 @cli.command("from-html")
 @click.argument("html_path")
 @click.option("--output", "-o", "output_path", default="report.html", show_default=True, help="Output HTML path")

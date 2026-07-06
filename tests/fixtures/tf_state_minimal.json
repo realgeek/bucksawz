@@ -1,0 +1,99 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.7.0",
+  "values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "aws_instance.web",
+          "mode": "managed",
+          "type": "aws_instance",
+          "name": "web",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "instance_type": "t3.micro",
+            "tags": {"Env": "prod"}
+          }
+        },
+        {
+          "address": "aws_db_instance.main",
+          "mode": "managed",
+          "type": "aws_db_instance",
+          "name": "main",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "instance_class": "db.t3.medium",
+            "engine": "postgres",
+            "multi_az": false,
+            "tags": {}
+          }
+        },
+        {
+          "address": "aws_lb.main",
+          "mode": "managed",
+          "type": "aws_lb",
+          "name": "main",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "load_balancer_type": "application",
+            "tags": {}
+          }
+        },
+        {
+          "address": "aws_ecs_task_definition.api",
+          "mode": "managed",
+          "type": "aws_ecs_task_definition",
+          "name": "api",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "requires_compatibilities": ["FARGATE"],
+            "cpu": "512",
+            "memory": "1024",
+            "runtime_platform": [{"cpu_architecture": "X86_64"}],
+            "tags": {}
+          }
+        },
+        {
+          "address": "aws_lambda_function.processor",
+          "mode": "managed",
+          "type": "aws_lambda_function",
+          "name": "processor",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "memory_size": 256,
+            "architectures": ["x86_64"],
+            "tags": {}
+          }
+        },
+        {
+          "address": "aws_s3_bucket.artifacts",
+          "mode": "managed",
+          "type": "aws_s3_bucket",
+          "name": "artifacts",
+          "provider_name": "registry.terraform.io/hashicorp/aws",
+          "values": {
+            "tags": {}
+          }
+        }
+      ],
+      "child_modules": [
+        {
+          "address": "module.network",
+          "resources": [
+            {
+              "address": "module.network.aws_instance.bastion",
+              "mode": "managed",
+              "type": "aws_instance",
+              "name": "bastion",
+              "provider_name": "registry.terraform.io/hashicorp/aws",
+              "values": {
+                "instance_type": "t3.nano",
+                "tags": {}
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
