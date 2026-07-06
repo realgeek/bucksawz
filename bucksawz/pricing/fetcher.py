@@ -215,11 +215,244 @@ def fetch_rds_instances(
     return stored
 
 
+def fetch_elasticache(
+    region: str, profile: Optional[str] = None, db: Optional[Path] = None
+) -> int:
+    """
+    ElastiCache on-demand node prices for `region`.
+    Service code: AmazonElastiCache, product family: Cache Instance.
+    Excludes Extended Support / Sync Durability surcharge line items — those
+    are additive charges on top of the base NodeUsage rate, not a distinct node price.
+    Returns count of rows stored.
+    """
+    pricing = _pricing_client(profile)
+    filters = [
+        {"Type": "TERM_MATCH", "Field": "regionCode", "Value": region},
+        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "Cache Instance"},
+    ]
+    stored = 0
+    for product in _iter_products(pricing, "AmazonElastiCache", filters):
+        attrs = product.get("product", {}).get("attributes", {})
+        usagetype = attrs.get("usagetype", "")
+        instance_type = attrs.get("instanceType", "")
+        engine = attrs.get("cacheEngine", "")
+        if "NodeUsage:" not in usagetype or "ExtendedSupport" in usagetype or "SyncDurability" in usagetype:
+            continue
+        if not instance_type or not engine:
+            continue
+        result = _ondemand_price(product)
+        if result is None:
+            continue
+        unit, price, desc = result
+        key = f"elasticache:{instance_type}:{engine.lower()}"
+        price_db.upsert("AmazonElastiCache", region, key, unit, price, desc, db=db)
+        stored += 1
+    return stored
+
+
+_S3_STORAGE_CLASSES = {
+    "Standard": "standard",
+    "Standard - Infrequent Access": "standard_ia",
+    "One Zone - Infrequent Access": "one_zone_ia",
+    "Glacier Instant Retrieval": "glacier_instant_retrieval",
+    "Amazon Glacier": "glacier_flexible_retrieval",
+    "Intelligent-Tiering Frequent Access": "intelligent_tiering",
+    "Reduced Redundancy": "reduced_redundancy",
+    "Express One Zone": "express_one_zone",
+}
+
+
+def fetch_s3(
+    region: str, profile: Optional[str] = None, db: Optional[Path] = None
+) -> int:
+    """
+    S3 per-GB monthly storage prices for `region`, one row per storage class in
+    `_S3_STORAGE_CLASSES`. Keyed on `volumeType` (not `storageClass`, which is a
+    coarser display grouping shared across several classes). Uses the first-tier
+    price since Standard storage is priced in declining GB tiers. Excludes Deep
+    Archive and the granular Intelligent-Tiering access-tier line items, whose
+    volumeType naming was ambiguous in a spot-check of the Pricing API response.
+    Service code: AmazonS3, product family: Storage.
+    Returns count of rows stored.
+    """
+    pricing = _pricing_client(profile)
+    filters = [
+        {"Type": "TERM_MATCH", "Field": "regionCode", "Value": region},
+        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "Storage"},
+    ]
+    stored = 0
+    for product in _iter_products(pricing, "AmazonS3", filters):
+        attrs = product.get("product", {}).get("attributes", {})
+        volume_type = attrs.get("volumeType", "")
+        slug = _S3_STORAGE_CLASSES.get(volume_type)
+        if slug is None:
+            continue
+        result = _first_tier_price(product)
+        if result is None:
+            continue
+        unit, price, desc = result
+        key = f"s3:storage:{slug}"
+        price_db.upsert("AmazonS3", region, key, unit, price, desc, db=db)
+        stored += 1
+    return stored
+
+
+_SQS_QUEUE_TYPES = {
+    "Standard": "standard",
+    "FIFO (first-in, first-out)": "fifo",
+    "Fair": "fair",
+}
+
+
+def fetch_sqs(
+    region: str, profile: Optional[str] = None, db: Optional[Path] = None
+) -> int:
+    """
+    SQS per-request prices for `region`, one row per queue type.
+    Service code: AWSQueueService, product family: API Request.
+    Returns count of rows stored.
+    """
+    pricing = _pricing_client(profile)
+    filters = [
+        {"Type": "TERM_MATCH", "Field": "regionCode", "Value": region},
+        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "API Request"},
+    ]
+    stored = 0
+    for product in _iter_products(pricing, "AWSQueueService", filters):
+        attrs = product.get("product", {}).get("attributes", {})
+        queue_type = attrs.get("queueType", "")
+        slug = _SQS_QUEUE_TYPES.get(queue_type)
+        if slug is None:
+            continue
+        result = _ondemand_price(product)
+        if result is None:
+            continue
+        unit, price, desc = result
+        key = f"sqs:requests:{slug}"
+        price_db.upsert("AWSQueueService", region, key, unit, price, desc, db=db)
+        stored += 1
+    return stored
+
+
+def _first_tier_price(product: dict) -> Optional[tuple[str, float, str]]:
+    """Like _ondemand_price, but prefers the beginRange=='0' tier for tiered pricing
+    (e.g. CloudWatch custom metrics get cheaper per-metric past 10k/240k/750k/1M)."""
+    for offer in product.get("terms", {}).get("OnDemand", {}).values():
+        dims = list(offer.get("priceDimensions", {}).values())
+        dims.sort(key=lambda d: d.get("beginRange", "") != "0")
+        for dim in dims:
+            price_str = dim.get("pricePerUnit", {}).get("USD", "0")
+            unit = dim.get("unit", "")
+            desc = dim.get("description", "")
+            try:
+                price = float(price_str)
+                if price > 0:
+                    return unit, price, desc
+            except (ValueError, TypeError):
+                continue
+    return None
+
+
+def fetch_cloudwatch(
+    region: str, profile: Optional[str] = None, db: Optional[Path] = None
+) -> int:
+    """
+    A handful of baseline CloudWatch prices for `region`: alarms, custom metrics
+    (first-tier rate), and Logs ingestion/storage. CloudWatch has dozens of niche
+    usage types (RUM, Synthetics, Contributor Insights, OTEL, etc.) not covered here.
+    Service code: AmazonCloudWatch.
+    Returns count of rows stored.
+    """
+    pricing = _pricing_client(profile)
+    filters = [{"Type": "TERM_MATCH", "Field": "regionCode", "Value": region}]
+    stored = 0
+    for product in _iter_products(pricing, "AmazonCloudWatch", filters):
+        attrs = product.get("product", {}).get("attributes", {})
+        usagetype = attrs.get("usagetype", "")
+        group = attrs.get("group", "")
+
+        if usagetype.endswith("CW:AlarmMonitorUsage"):
+            key, unit_price = "cloudwatch:alarm", _ondemand_price(product)
+        elif usagetype.endswith("CW:MetricMonitorUsage"):
+            key, unit_price = "cloudwatch:metric", _first_tier_price(product)
+        elif usagetype.endswith("DataProcessing-Bytes") and group == "Ingested Logs":
+            key, unit_price = "cloudwatch:logs:ingestion", _ondemand_price(product)
+        elif usagetype.endswith("TimedStorage-ByteHrs") and group == "":
+            fam = product.get("product", {}).get("productFamily", "")
+            if fam != "Storage Snapshot":
+                continue
+            key, unit_price = "cloudwatch:logs:storage", _ondemand_price(product)
+        else:
+            continue
+
+        if unit_price is None:
+            continue
+        unit, price, desc = unit_price
+        price_db.upsert("AmazonCloudWatch", region, key, unit, price, desc, db=db)
+        stored += 1
+    return stored
+
+
+_ELB_TYPES = {
+    "Load Balancer-Application": "application",
+    "Load Balancer-Network": "network",
+    "Load Balancer-Gateway": "gateway",
+    "Load Balancer": "classic",
+}
+
+
+def fetch_elb(
+    region: str, profile: Optional[str] = None, db: Optional[Path] = None
+) -> int:
+    """
+    ELB hourly + LCU prices for `region`, one pair per load balancer type
+    (application/network/gateway/classic).
+    Service code: AWSELB.
+    Returns count of rows stored.
+    """
+    pricing = _pricing_client(profile)
+    filters = [{"Type": "TERM_MATCH", "Field": "regionCode", "Value": region}]
+    stored = 0
+    for product in _iter_products(pricing, "AWSELB", filters):
+        attrs = product.get("product", {}).get("attributes", {})
+        family = product.get("product", {}).get("productFamily", "")
+        usagetype = attrs.get("usagetype", "")
+        lb_slug = _ELB_TYPES.get(family)
+        if lb_slug is None:
+            continue
+        # "Outposts-" and "TS-" (Trust Store) usage types also end with these
+        # suffixes and would otherwise silently overwrite the real regional price.
+        if "Outposts" in usagetype or usagetype.startswith("TS-"):
+            continue
+
+        if usagetype.endswith("LoadBalancerUsage") and not usagetype.endswith("Reserved LoadBalancerUsage"):
+            key = f"elb:hourly:{lb_slug}"
+        elif usagetype.endswith("LCUUsage") and not usagetype.endswith("ReservedLCUUsage"):
+            key = f"elb:lcu:{lb_slug}"
+        elif lb_slug == "classic" and usagetype.endswith("DataProcessing-Bytes"):
+            key = "elb:data:classic"
+        else:
+            continue
+
+        result = _ondemand_price(product)
+        if result is None:
+            continue
+        unit, price, desc = result
+        price_db.upsert("AWSELB", region, key, unit, price, desc, db=db)
+        stored += 1
+    return stored
+
+
 _FETCHERS: dict[str, object] = {
     "ECS": fetch_fargate,
     "Lambda": fetch_lambda,
     "EC2": fetch_ec2_instances,
     "RDS": fetch_rds_instances,
+    "ElastiCache": fetch_elasticache,
+    "S3": fetch_s3,
+    "SQS": fetch_sqs,
+    "CloudWatch": fetch_cloudwatch,
+    "ELB": fetch_elb,
 }
 
 ALL_SERVICES: list[str] = list(_FETCHERS.keys())
