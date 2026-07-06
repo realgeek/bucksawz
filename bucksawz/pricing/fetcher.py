@@ -85,22 +85,27 @@ def fetch_fargate(
     pricing = _pricing_client(profile)
     filters = [
         {"Type": "TERM_MATCH", "Field": "regionCode", "Value": region},
-        {"Type": "TERM_MATCH", "Field": "operatingSystem", "Value": "Linux"},
     ]
     stored = 0
     for product in _iter_products(pricing, "AmazonECS", filters):
+        attrs = product.get("product", {}).get("attributes", {})
         family = product.get("product", {}).get("productFamily", "")
         if "Compute" not in family:
             continue
+        usagetype = attrs.get("usagetype", "")
+        # Fargate Linux/x86 line items carry no operatingSystem attribute at
+        # all (only the Windows variants do), so filter on usagetype instead.
+        if "Fargate" not in usagetype or "Windows" in usagetype:
+            continue
+        is_arm = "ARM" in usagetype
         result = _ondemand_price(product)
         if result is None:
             continue
         unit, price, desc = result
-        unit_lower = unit.lower()
-        if "vcpu" in unit_lower or "cpu" in unit_lower:
-            key = "fargate:vcpu"
-        elif "gb" in unit_lower or "memory" in unit_lower:
-            key = "fargate:memory"
+        if "vCPU-Hours" in usagetype:
+            key = "fargate:vcpu:arm" if is_arm else "fargate:vcpu"
+        elif "GB-Hours" in usagetype and "Ephemeral" not in usagetype:
+            key = "fargate:memory:arm" if is_arm else "fargate:memory"
         else:
             continue
         price_db.upsert("AmazonECS", region, key, unit, price, desc, db=db)
