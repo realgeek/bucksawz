@@ -72,15 +72,191 @@ def _price_ec2_instance(tf: TFResource, region: str, db=None) -> Optional[Resour
         monthly_cost=monthly_cost,
         usage_based=False,
     )
+    subs = _ec2_block_device_resources(tf, region, db)
+    monthly_cost += sum(s.total_monthly_cost() for s in subs)
     return Resource(
         name=tf.address,
         resource_type=tf.type,
         tags=values.get("tags") or {},
         monthly_cost=monthly_cost,
-        hourly_cost=price,
+        hourly_cost=monthly_cost / 730,
         cost_components=[comp],
-        sub_resources=[],
+        sub_resources=subs,
     )
+
+
+# AWS-fixed baselines included free in gp3's price — provisioning above these
+# is what the extra IOPS/throughput price keys bill for. io1 has no free tier;
+# io2's IOPS is billed in three tiers instead, with AWS-fixed boundaries.
+_GP3_BASELINE_IOPS = 3_000.0
+_GP3_BASELINE_MIBPS = 125.0
+_IO2_IOPS_TIERS = [(32_000.0, "ebs:iops:io2:tier1"), (32_000.0, "ebs:iops:io2:tier2"), (None, "ebs:iops:io2:tier3")]
+
+
+def _ebs_iops_cost(
+    volume_type: str, iops: Optional[float], region: str, db=None
+) -> tuple[float, Optional[CostComponent]]:
+    """
+    Monthly cost (and its component) from provisioned IOPS. gp2/st1/sc1/standard
+    have no separate IOPS charge, so this returns (0.0, None) for them.
+    """
+    if not iops or volume_type not in ("gp3", "io1", "io2"):
+        return 0.0, None
+
+    if volume_type == "gp3":
+        billable = max(0.0, iops - _GP3_BASELINE_IOPS)
+        if billable <= 0:
+            return 0.0, None
+        row = price_db.get_price("AmazonEC2", region, "ebs:iops:gp3", db=db)
+        if row is None:
+            return 0.0, None
+        cost = billable * row["price_usd"]
+        return cost, CostComponent(
+            name=f"Provisioned IOPS (above {_GP3_BASELINE_IOPS:.0f} baseline)",
+            unit="IOPS-months", hourly_quantity=None, monthly_quantity=billable,
+            price=row["price_usd"], hourly_cost=None, monthly_cost=cost, usage_based=False,
+        )
+
+    if volume_type == "io1":
+        row = price_db.get_price("AmazonEC2", region, "ebs:iops:io1", db=db)
+        if row is None:
+            return 0.0, None
+        cost = iops * row["price_usd"]
+        return cost, CostComponent(
+            name="Provisioned IOPS", unit="IOPS-months",
+            hourly_quantity=None, monthly_quantity=iops,
+            price=row["price_usd"], hourly_cost=None, monthly_cost=cost, usage_based=False,
+        )
+
+    # io2: blend across the three tiers. All three price rows come from one
+    # `prices update` call, so a tier missing mid-ladder isn't a realistic case
+    # in practice — if it happens, treat that band as free rather than failing
+    # the whole volume.
+    remaining, cost = iops, 0.0
+    for cap, key in _IO2_IOPS_TIERS:
+        if remaining <= 0:
+            break
+        band = remaining if cap is None else min(remaining, cap)
+        row = price_db.get_price("AmazonEC2", region, key, db=db)
+        if row is not None:
+            cost += band * row["price_usd"]
+        remaining -= band
+    return cost, CostComponent(
+        name="Provisioned IOPS (io2, tiered)", unit="IOPS-months",
+        hourly_quantity=None, monthly_quantity=iops,
+        price=None, hourly_cost=None, monthly_cost=cost, usage_based=False,
+    )
+
+
+def _ebs_throughput_cost(
+    volume_type: str, throughput: Optional[float], region: str, db=None
+) -> tuple[float, Optional[CostComponent]]:
+    """Monthly cost from provisioned throughput above gp3's included baseline."""
+    if volume_type != "gp3" or not throughput:
+        return 0.0, None
+    billable = max(0.0, throughput - _GP3_BASELINE_MIBPS)
+    if billable <= 0:
+        return 0.0, None
+    row = price_db.get_price("AmazonEC2", region, "ebs:throughput:gp3", db=db)
+    if row is None:
+        return 0.0, None
+    cost = billable * row["price_usd"]
+    return cost, CostComponent(
+        name=f"Provisioned throughput (above {_GP3_BASELINE_MIBPS:.0f} MiB/s baseline)",
+        unit="MiBps-months", hourly_quantity=None, monthly_quantity=billable,
+        price=row["price_usd"], hourly_cost=None, monthly_cost=cost, usage_based=False,
+    )
+
+
+def _price_ebs_block(
+    name: str, resource_type: str, tags: dict, values: dict, region: str, db=None
+) -> Resource:
+    """
+    Price one EBS volume from a normalized `values` dict: shared by the
+    standalone `aws_ebs_volume` resource and the root_block_device /
+    ebs_block_device / block_device_mappings[].ebs blocks nested inside
+    aws_instance and aws_launch_template — same cost basis either way.
+    """
+    volume_type = (values.get("type") or values.get("volume_type") or "gp2").lower()
+    size = values.get("size") or values.get("volume_size")
+    if not size:
+        return Resource(
+            name=name, resource_type=resource_type, tags=tags,
+            monthly_cost=None, hourly_cost=None, cost_components=[], sub_resources=[],
+            is_supported=False, no_price=True,
+        )
+
+    storage_row = price_db.get_price("AmazonEC2", region, f"ebs:storage:{volume_type}", db=db)
+    if storage_row is None:
+        return Resource(
+            name=name, resource_type=resource_type, tags=tags,
+            monthly_cost=None, hourly_cost=None, cost_components=[], sub_resources=[],
+            is_supported=False, no_price=True,
+        )
+
+    size = float(size)
+    storage_price = storage_row["price_usd"]
+    storage_cost = size * storage_price
+    comps = [CostComponent(
+        name=f"Storage ({volume_type}, {size:.0f} GB)", unit="GB-months",
+        hourly_quantity=None, monthly_quantity=size,
+        price=storage_price, hourly_cost=None, monthly_cost=storage_cost, usage_based=False,
+    )]
+
+    iops = values.get("iops")
+    iops_cost, iops_comp = _ebs_iops_cost(volume_type, float(iops) if iops else None, region, db)
+    if iops_comp is not None:
+        comps.append(iops_comp)
+
+    throughput = values.get("throughput")
+    tput_cost, tput_comp = _ebs_throughput_cost(volume_type, float(throughput) if throughput else None, region, db)
+    if tput_comp is not None:
+        comps.append(tput_comp)
+
+    monthly_cost = storage_cost + iops_cost + tput_cost
+    return Resource(
+        name=name, resource_type=resource_type, tags=tags,
+        monthly_cost=monthly_cost, hourly_cost=monthly_cost / 730,
+        cost_components=comps, sub_resources=[],
+    )
+
+
+def _price_ebs_volume(tf: TFResource, region: str, db=None) -> Optional[Resource]:
+    return _price_ebs_block(tf.address, tf.type, tf.values.get("tags") or {}, tf.values, region, db)
+
+
+def _ec2_block_device_resources(tf: TFResource, region: str, db=None) -> list[Resource]:
+    """
+    EBS volumes attached to an aws_instance or aws_launch_template, priced as
+    sub-resources of the instance. Covers both the aws_instance shape
+    (root_block_device / ebs_block_device) and the launch-template shape
+    (block_device_mappings[].ebs) — the two providers describe the same thing
+    differently. Ephemeral / no_device mappings (no `ebs` block) aren't EBS
+    and are skipped.
+    """
+    values = tf.values
+    subs: list[Resource] = []
+
+    root = values.get("root_block_device")
+    if isinstance(root, dict):
+        root = [root]
+    for blk in root or []:
+        subs.append(_price_ebs_block(f"{tf.address} root volume", "aws_ebs_volume", {}, blk, region, db))
+
+    for blk in values.get("ebs_block_device") or []:
+        dev = blk.get("device_name", "?")
+        subs.append(_price_ebs_block(f"{tf.address} block device ({dev})", "aws_ebs_volume", {}, blk, region, db))
+
+    for mapping in values.get("block_device_mappings") or []:
+        ebs = mapping.get("ebs")
+        if isinstance(ebs, list):
+            ebs = ebs[0] if ebs else None
+        if not ebs:
+            continue
+        dev = mapping.get("device_name", "?")
+        subs.append(_price_ebs_block(f"{tf.address} block device ({dev})", "aws_ebs_volume", {}, ebs, region, db))
+
+    return subs
 
 
 def _price_rds_instance(tf: TFResource, region: str, db=None) -> Optional[Resource]:
@@ -399,6 +575,7 @@ def _price_sqs_queue(tf: TFResource, region: str, db=None) -> Optional[Resource]
 _PRICERS = {
     "aws_instance": _price_ec2_instance,
     "aws_launch_template": _price_ec2_instance,
+    "aws_ebs_volume": _price_ebs_volume,
     "aws_db_instance": _price_rds_instance,
     "aws_rds_cluster_instance": _price_rds_instance,
     "aws_lb": _price_lb,

@@ -113,7 +113,7 @@ breakdowns appear automatically in the report — no extra flags needed.
 
 ```bash
 # Pre-fetch prices (requires pricing:GetProducts). Defaults to every supported
-# service: ECS, Lambda, EC2, RDS, ElastiCache, S3, SQS, CloudWatch, ELB.
+# service: ECS, Lambda, EC2, EBS, RDS, ElastiCache, S3, SQS, CloudWatch, ELB.
 bucksawz prices update \
   --regions us-east-1,eu-west-2,ap-southeast-2 \
   --aws-profile my-profile
@@ -153,6 +153,7 @@ types priced today:
 | Terraform type | Cost basis |
 | --- | --- |
 | `aws_instance`, `aws_launch_template` | on-demand instance hours (Linux, shared tenancy) |
+| `aws_ebs_volume`, plus `root_block_device`/`ebs_block_device`/`block_device_mappings` on the above | per-GB-month storage (7 volume types) + provisioned IOPS/throughput above the gp3 baseline, io1/io2 tiering |
 | `aws_db_instance`, `aws_rds_cluster_instance` | instance hours by engine + Single/Multi-AZ |
 | `aws_elasticache_cluster`, `aws_elasticache_replication_group` | node hours × node count |
 | `aws_ecs_task_definition` (Fargate) | vCPU + GB hours, x86 or ARM |
@@ -161,11 +162,17 @@ types priced today:
 | `aws_s3_bucket` | Standard storage GB-month unit price (usage-based) |
 | `aws_sqs_queue` | request unit price, Standard or FIFO (usage-based) |
 
+EBS volumes attached to an instance or launch template are priced as sub-resources
+of it and folded into its total; a standalone `aws_ebs_volume` prices the same way
+on its own. gp3's first 3,000 IOPS / 125 MiB/s are included in the storage price —
+only usage above that is billed separately; io1 has no free IOPS tier; io2 IOPS is
+billed across three AWS-fixed tiers.
+
 Usage-based rows carry a unit price but no monthly total — quantity isn't knowable
 from a Terraform config. Anything unrecognised is listed as no-price rather than
 dropped, so the report still accounts for it. Everything else is out of scope for
-now: EBS volumes, NAT gateways, data transfer, and reserved/savings-plan discounts
-are not modelled.
+now: NAT gateways, data transfer, and reserved/savings-plan discounts are not
+modelled.
 
 ### Cache management
 
@@ -233,7 +240,8 @@ Infracost itself is also Apache 2.0. bucksawz aims to be a drop-in replacement f
 - [x] Standalone pricing engine: estimate costs directly from Terraform plan JSON without Infracost (`bucksawz price-state`)
 - [x] ELB/ALB/NLB pricing in the price cache
 - [x] Plan cost diffs — per-resource delta from a Terraform plan or an Infracost `diff`
-- [ ] Broaden `price-state` coverage: EBS volumes, NAT gateways, data transfer
+- [x] EBS pricing: storage (7 volume types), provisioned IOPS/throughput, root/attached volumes
+- [ ] Broaden `price-state` coverage further: NAT gateways, data transfer, Config, Route 53, KMS, WAF, Secrets Manager
 - [ ] CloudWatch metrics for S3 bucket size and CloudWatch Logs volume, so those unit prices resolve to real estimates
 - [ ] Multi-region `price-state` (currently one `--region` per run; a plan spanning providers is priced against one region)
 - [ ] Multi-region enrichment (currently one CE region per `enrich` run)

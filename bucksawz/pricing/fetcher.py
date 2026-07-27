@@ -451,10 +451,99 @@ def fetch_elb(
     return stored
 
 
+# volumeApiName -> the same slug Terraform's aws_ebs_volume `type` uses.
+_EBS_VOLUME_TYPES = {"standard", "gp2", "gp3", "io1", "io2", "st1", "sc1"}
+
+
+def fetch_ebs(
+    region: str, profile: Optional[str] = None, db: Optional[Path] = None
+) -> int:
+    """
+    EBS per-GB-month storage for all seven volume types, plus the provisioned
+    IOPS and throughput rates that sit on top of storage for io1/io2/gp3.
+
+    gp3 bills IOPS and throughput only above its included baseline (3,000 IOPS /
+    125 MiB/s) — the pricer applies that baseline, not this fetcher, since it's
+    a property of how the volume is billed rather than of the price itself.
+    io1 has no free IOPS tier. io2 IOPS is billed in three tiers (0-32,000 /
+    32,001-64,000 / 64,001+); the tier boundary is fixed by AWS, not fetched.
+
+    Service code: AmazonEC2, product families: Storage, System Operation,
+    Provisioned Throughput. Returns count of rows stored.
+    """
+    pricing = _pricing_client(profile)
+    stored = 0
+
+    filters = [
+        {"Type": "TERM_MATCH", "Field": "regionCode", "Value": region},
+        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "Storage"},
+    ]
+    for product in _iter_products(pricing, "AmazonEC2", filters):
+        attrs = product.get("product", {}).get("attributes", {})
+        vol = attrs.get("volumeApiName", "")
+        if vol not in _EBS_VOLUME_TYPES:
+            continue
+        result = _ondemand_price(product)
+        if result is None:
+            continue
+        unit, price, desc = result
+        price_db.upsert("AmazonEC2", region, f"ebs:storage:{vol}", unit, price, desc, db=db)
+        stored += 1
+
+    filters = [
+        {"Type": "TERM_MATCH", "Field": "regionCode", "Value": region},
+        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "System Operation"},
+    ]
+    for product in _iter_products(pricing, "AmazonEC2", filters):
+        attrs = product.get("product", {}).get("attributes", {})
+        usagetype = attrs.get("usagetype", "")
+        # Bare suffix (no .tierN) is io2's first tier, 0-32,000 IOPS.
+        if usagetype.endswith("EBS:VolumeP-IOPS.gp3"):
+            key = "ebs:iops:gp3"
+        elif usagetype.endswith("EBS:VolumeP-IOPS.piops"):
+            key = "ebs:iops:io1"
+        elif usagetype.endswith("EBS:VolumeP-IOPS.io2"):
+            key = "ebs:iops:io2:tier1"
+        elif usagetype.endswith("EBS:VolumeP-IOPS.io2.tier2"):
+            key = "ebs:iops:io2:tier2"
+        elif usagetype.endswith("EBS:VolumeP-IOPS.io2.tier3"):
+            key = "ebs:iops:io2:tier3"
+        else:
+            continue
+        result = _ondemand_price(product)
+        if result is None:
+            continue
+        unit, price, desc = result
+        price_db.upsert("AmazonEC2", region, key, unit, price, desc, db=db)
+        stored += 1
+
+    filters = [
+        {"Type": "TERM_MATCH", "Field": "regionCode", "Value": region},
+        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "Provisioned Throughput"},
+    ]
+    for product in _iter_products(pricing, "AmazonEC2", filters):
+        attrs = product.get("product", {}).get("attributes", {})
+        if not attrs.get("usagetype", "").endswith("EBS:VolumeP-Throughput.gp3"):
+            continue
+        result = _ondemand_price(product)
+        if result is None:
+            continue
+        unit, price, desc = result
+        # Priced per GiBps-month; the pricer works in MiB/s (1 GiBps = 1024 MiBps).
+        if unit == "GiBps-mo":
+            price = price / 1024.0
+            unit = "MiBps-Mo"
+        price_db.upsert("AmazonEC2", region, "ebs:throughput:gp3", unit, price, desc, db=db)
+        stored += 1
+
+    return stored
+
+
 _FETCHERS: dict[str, object] = {
     "ECS": fetch_fargate,
     "Lambda": fetch_lambda,
     "EC2": fetch_ec2_instances,
+    "EBS": fetch_ebs,
     "RDS": fetch_rds_instances,
     "ElastiCache": fetch_elasticache,
     "S3": fetch_s3,

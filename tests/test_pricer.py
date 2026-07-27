@@ -26,6 +26,16 @@ def tmp_db(tmp_path) -> Path:
     price_db.upsert("AmazonS3", "us-east-1", "s3:storage:standard", "GB-Mo", 0.023, db=db)
     price_db.upsert("AWSQueueService", "us-east-1", "sqs:requests:standard", "Requests", 4e-7, db=db)
     price_db.upsert("AWSQueueService", "us-east-1", "sqs:requests:fifo", "Requests", 5e-7, db=db)
+    price_db.upsert("AmazonEC2", "us-east-1", "ebs:storage:gp3", "GB-Mo", 0.08, db=db)
+    price_db.upsert("AmazonEC2", "us-east-1", "ebs:storage:gp2", "GB-Mo", 0.10, db=db)
+    price_db.upsert("AmazonEC2", "us-east-1", "ebs:storage:io1", "GB-Mo", 0.125, db=db)
+    price_db.upsert("AmazonEC2", "us-east-1", "ebs:storage:io2", "GB-Mo", 0.125, db=db)
+    price_db.upsert("AmazonEC2", "us-east-1", "ebs:iops:gp3", "IOPS-Mo", 0.005, db=db)
+    price_db.upsert("AmazonEC2", "us-east-1", "ebs:iops:io1", "IOPS-Mo", 0.065, db=db)
+    price_db.upsert("AmazonEC2", "us-east-1", "ebs:iops:io2:tier1", "IOPS-Mo", 0.065, db=db)
+    price_db.upsert("AmazonEC2", "us-east-1", "ebs:iops:io2:tier2", "IOPS-Mo", 0.0455, db=db)
+    price_db.upsert("AmazonEC2", "us-east-1", "ebs:iops:io2:tier3", "IOPS-Mo", 0.03185, db=db)
+    price_db.upsert("AmazonEC2", "us-east-1", "ebs:throughput:gp3", "MiBps-Mo", 0.04, db=db)
     return db
 
 
@@ -261,6 +271,196 @@ def test_sqs_fifo_queue_uses_fifo_price(tmp_db):
     tf = _tf("aws_sqs_queue", {"fifo_queue": True})
     [resource] = price_resources([tf], "us-east-1", db=tmp_db)
     assert resource.cost_components[0].price == pytest.approx(0.50)
+
+
+# ── EBS: standalone aws_ebs_volume ───────────────────────────────────────────
+
+
+def test_ebs_volume_gp3_storage_only(tmp_db):
+    tf = _tf("aws_ebs_volume", {"type": "gp3", "size": 100})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.monthly_cost == pytest.approx(100 * 0.08)
+    [comp] = resource.cost_components
+    assert comp.name == "Storage (gp3, 100 GB)"
+
+
+def test_ebs_volume_defaults_to_gp2_when_type_missing(tmp_db):
+    tf = _tf("aws_ebs_volume", {"size": 50})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.monthly_cost == pytest.approx(50 * 0.10)
+
+
+def test_ebs_volume_missing_size_is_unpriced(tmp_db):
+    tf = _tf("aws_ebs_volume", {"type": "gp3"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.no_price
+
+
+def test_ebs_volume_uncached_type_is_unpriced(empty_db):
+    tf = _tf("aws_ebs_volume", {"type": "gp3", "size": 100})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+def test_ebs_gp3_iops_below_baseline_is_free(tmp_db):
+    """3,000 IOPS is included in gp3's storage price."""
+    tf = _tf("aws_ebs_volume", {"type": "gp3", "size": 100, "iops": 3000})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.monthly_cost == pytest.approx(100 * 0.08)
+    assert len(resource.cost_components) == 1
+
+
+def test_ebs_gp3_iops_above_baseline_billed_on_the_excess(tmp_db):
+    tf = _tf("aws_ebs_volume", {"type": "gp3", "size": 100, "iops": 4000})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    expected = (100 * 0.08) + (1000 * 0.005)
+    assert resource.monthly_cost == pytest.approx(expected)
+
+
+def test_ebs_gp3_throughput_below_baseline_is_free(tmp_db):
+    """125 MiB/s is included in gp3's storage price."""
+    tf = _tf("aws_ebs_volume", {"type": "gp3", "size": 100, "throughput": 125})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.monthly_cost == pytest.approx(100 * 0.08)
+
+
+def test_ebs_gp3_throughput_above_baseline_billed_on_the_excess(tmp_db):
+    tf = _tf("aws_ebs_volume", {"type": "gp3", "size": 100, "throughput": 500})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    expected = (100 * 0.08) + (375 * 0.04)
+    assert resource.monthly_cost == pytest.approx(expected)
+
+
+def test_ebs_gp3_iops_and_throughput_both_billed(tmp_db):
+    tf = _tf("aws_ebs_volume", {"type": "gp3", "size": 100, "iops": 5000, "throughput": 250})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    expected = (100 * 0.08) + (2000 * 0.005) + (125 * 0.04)
+    assert resource.monthly_cost == pytest.approx(expected)
+    assert len(resource.cost_components) == 3
+
+
+def test_ebs_io1_iops_has_no_free_tier(tmp_db):
+    tf = _tf("aws_ebs_volume", {"type": "io1", "size": 100, "iops": 1000})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    expected = (100 * 0.125) + (1000 * 0.065)
+    assert resource.monthly_cost == pytest.approx(expected)
+
+
+def test_ebs_io2_iops_within_first_tier(tmp_db):
+    tf = _tf("aws_ebs_volume", {"type": "io2", "size": 100, "iops": 10000})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    expected = (100 * 0.125) + (10000 * 0.065)
+    assert resource.monthly_cost == pytest.approx(expected)
+
+
+def test_ebs_io2_iops_blends_across_tier_boundaries(tmp_db):
+    """40,000 IOPS = 32,000 @ tier1 + 8,000 @ tier2 — not 40,000 at either rate."""
+    tf = _tf("aws_ebs_volume", {"type": "io2", "size": 100, "iops": 40000})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    expected = (100 * 0.125) + (32000 * 0.065) + (8000 * 0.0455)
+    assert resource.monthly_cost == pytest.approx(expected)
+
+
+def test_ebs_io2_iops_reaches_third_tier(tmp_db):
+    tf = _tf("aws_ebs_volume", {"type": "io2", "size": 100, "iops": 70000})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    expected = (100 * 0.125) + (32000 * 0.065) + (32000 * 0.0455) + (6000 * 0.03185)
+    assert resource.monthly_cost == pytest.approx(expected)
+
+
+def test_ebs_st1_has_no_iops_component(tmp_db):
+    """st1/sc1/standard don't take a separate IOPS charge even if given one."""
+    price_db.upsert("AmazonEC2", "us-east-1", "ebs:storage:st1", "GB-Mo", 0.045, db=tmp_db)
+    tf = _tf("aws_ebs_volume", {"type": "st1", "size": 500, "iops": 500})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.monthly_cost == pytest.approx(500 * 0.045)
+    assert len(resource.cost_components) == 1
+
+
+# ── EBS: attached to aws_instance / aws_launch_template ──────────────────────
+
+
+def test_instance_root_volume_adds_to_total(tmp_db):
+    tf = _tf("aws_instance", {
+        "instance_type": "t3.micro",
+        "root_block_device": [{"volume_type": "gp3", "volume_size": 20}],
+    })
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    expected = (0.0104 * 730) + (20 * 0.08)
+    assert resource.monthly_cost == pytest.approx(expected)
+    [root] = resource.sub_resources
+    assert root.monthly_cost == pytest.approx(20 * 0.08)
+
+
+def test_instance_root_block_device_as_bare_dict(tmp_db):
+    """Some state exports give root_block_device as a single dict, not a list."""
+    tf = _tf("aws_instance", {
+        "instance_type": "t3.micro",
+        "root_block_device": {"volume_type": "gp3", "volume_size": 20},
+    })
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert len(resource.sub_resources) == 1
+
+
+def test_instance_additional_ebs_block_devices(tmp_db):
+    tf = _tf("aws_instance", {
+        "instance_type": "t3.micro",
+        "root_block_device": [{"volume_type": "gp3", "volume_size": 20}],
+        "ebs_block_device": [
+            {"device_name": "/dev/sdf", "volume_type": "gp2", "volume_size": 100},
+            {"device_name": "/dev/sdg", "volume_type": "gp2", "volume_size": 200},
+        ],
+    })
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    expected = (0.0104 * 730) + (20 * 0.08) + (100 * 0.10) + (200 * 0.10)
+    assert resource.monthly_cost == pytest.approx(expected)
+    assert len(resource.sub_resources) == 3
+    names = [s.name for s in resource.sub_resources]
+    assert any("/dev/sdf" in n for n in names)
+    assert any("/dev/sdg" in n for n in names)
+
+
+def test_instance_with_no_block_devices_is_unaffected(tmp_db):
+    tf = _tf("aws_instance", {"instance_type": "t3.micro"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.monthly_cost == pytest.approx(0.0104 * 730)
+    assert resource.sub_resources == []
+
+
+def test_launch_template_block_device_mappings(tmp_db):
+    tf = _tf("aws_launch_template", {
+        "instance_type": "t3.micro",
+        "block_device_mappings": [
+            {"device_name": "/dev/xvda", "ebs": [{"volume_type": "gp3", "volume_size": 30}]},
+        ],
+    })
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    expected = (0.0104 * 730) + (30 * 0.08)
+    assert resource.monthly_cost == pytest.approx(expected)
+
+
+def test_launch_template_no_device_mapping_is_skipped(tmp_db):
+    """A mapping with no `ebs` block (ephemeral / no_device) isn't an EBS volume."""
+    tf = _tf("aws_launch_template", {
+        "instance_type": "t3.micro",
+        "block_device_mappings": [
+            {"device_name": "ephemeral0", "virtual_name": "ephemeral0", "ebs": []},
+        ],
+    })
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.sub_resources == []
+
+
+def test_instance_unpriced_block_device_still_visible(tmp_db):
+    """An EBS type with no cached price shows up as no_price, not silently dropped."""
+    tf = _tf("aws_instance", {
+        "instance_type": "t3.micro",
+        "root_block_device": [{"volume_type": "sc1", "volume_size": 20}],
+    })
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.monthly_cost == pytest.approx(0.0104 * 730)  # instance cost unaffected
+    [root] = resource.sub_resources
+    assert root.no_price
 
 
 def test_unsupported_resource_type_skipped(tmp_db):

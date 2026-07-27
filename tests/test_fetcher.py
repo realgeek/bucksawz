@@ -470,6 +470,72 @@ def test_fetch_cloudwatch_ignores_niche_usage_types(fake_pricing, tmp_db):
     assert fetcher.fetch_cloudwatch("us-east-1", db=tmp_db) == 0
 
 
+# ── EBS ──────────────────────────────────────────────────────────────────────
+
+
+def test_fetch_ebs_storage_all_volume_types(fake_pricing, tmp_db):
+    fake_pricing([
+        _product("Storage", {"volumeApiName": "gp3"}, _dim(0.08, unit="GB-Mo")),
+        _product("Storage", {"volumeApiName": "gp2"}, _dim(0.10, unit="GB-Mo")),
+        _product("Storage", {"volumeApiName": "io1"}, _dim(0.125, unit="GB-Mo")),
+        _product("Storage", {"volumeApiName": "io2"}, _dim(0.125, unit="GB-Mo")),
+        _product("Storage", {"volumeApiName": "st1"}, _dim(0.045, unit="GB-Mo")),
+        _product("Storage", {"volumeApiName": "sc1"}, _dim(0.015, unit="GB-Mo")),
+        _product("Storage", {"volumeApiName": "standard"}, _dim(0.05, unit="GB-Mo")),
+    ])
+    assert fetcher.fetch_ebs("us-east-1", db=tmp_db) == 7
+    assert set(_keys("AmazonEC2", "us-east-1", tmp_db)) == {
+        "ebs:storage:gp3", "ebs:storage:gp2", "ebs:storage:io1", "ebs:storage:io2",
+        "ebs:storage:st1", "ebs:storage:sc1", "ebs:storage:standard",
+    }
+
+
+def test_fetch_ebs_skips_unknown_volume_api_name(fake_pricing, tmp_db):
+    fake_pricing([_product("Storage", {"volumeApiName": "outposts-thing"}, _dim(1.0))])
+    assert fetcher.fetch_ebs("us-east-1", db=tmp_db) == 0
+
+
+def test_fetch_ebs_iops_gp3_io1_and_io2_tiers(fake_pricing, tmp_db):
+    fake_pricing([
+        _product("System Operation", {"usagetype": "EBS:VolumeP-IOPS.gp3"}, _dim(0.005, unit="IOPS-Mo")),
+        _product("System Operation", {"usagetype": "EBS:VolumeP-IOPS.piops"}, _dim(0.065, unit="IOPS-Mo")),
+        _product("System Operation", {"usagetype": "EBS:VolumeP-IOPS.io2"}, _dim(0.065, unit="IOPS-Mo")),
+        _product("System Operation", {"usagetype": "EBS:VolumeP-IOPS.io2.tier2"}, _dim(0.0455, unit="IOPS-Mo")),
+        _product("System Operation", {"usagetype": "EBS:VolumeP-IOPS.io2.tier3"}, _dim(0.03185, unit="IOPS-Mo")),
+    ])
+    assert fetcher.fetch_ebs("us-east-1", db=tmp_db) == 5
+    assert set(_keys("AmazonEC2", "us-east-1", tmp_db)) == {
+        "ebs:iops:gp3", "ebs:iops:io1",
+        "ebs:iops:io2:tier1", "ebs:iops:io2:tier2", "ebs:iops:io2:tier3",
+    }
+
+
+def test_fetch_ebs_ignores_unrelated_system_operation_usagetypes(fake_pricing, tmp_db):
+    """The System Operation family also carries data transfer, snapshot copy, etc."""
+    fake_pricing([
+        _product("System Operation", {"usagetype": "EBS:VolumeIOUsage"}, _dim(5e-8)),
+        _product("System Operation", {"usagetype": "USE1-EBS:TimeBasedSnapshotCopy.tier1"}, _dim(0.02)),
+    ])
+    assert fetcher.fetch_ebs("us-east-1", db=tmp_db) == 0
+
+
+def test_fetch_ebs_throughput_normalized_from_gibps_to_mibps(fake_pricing, tmp_db):
+    """API prices per GiBps-month; the pricer works in MiB/s (1 GiBps = 1024 MiBps)."""
+    fake_pricing([
+        _product("Provisioned Throughput", {"usagetype": "EBS:VolumeP-Throughput.gp3"},
+                 _dim(40.96, unit="GiBps-mo")),
+    ])
+    assert fetcher.fetch_ebs("us-east-1", db=tmp_db) == 1
+    row = price_db.get_price("AmazonEC2", "us-east-1", "ebs:throughput:gp3", db=tmp_db)
+    assert row["unit"] == "MiBps-Mo"
+    assert row["price_usd"] == pytest.approx(0.04)
+
+
+def test_fetch_ebs_throughput_ignores_other_usagetypes(fake_pricing, tmp_db):
+    fake_pricing([_product("Provisioned Throughput", {"usagetype": "SomethingElse"}, _dim(1.0))])
+    assert fetcher.fetch_ebs("us-east-1", db=tmp_db) == 0
+
+
 # ── ELB ──────────────────────────────────────────────────────────────────────
 
 
@@ -543,7 +609,7 @@ def test_fetch_elb_ignores_unknown_product_family(fake_pricing, tmp_db):
 
 def test_all_services_matches_fetcher_registry():
     assert set(fetcher.ALL_SERVICES) == {
-        "ECS", "Lambda", "EC2", "RDS", "ElastiCache", "S3", "SQS", "CloudWatch", "ELB",
+        "ECS", "Lambda", "EC2", "EBS", "RDS", "ElastiCache", "S3", "SQS", "CloudWatch", "ELB",
     }
 
 
