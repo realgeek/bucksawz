@@ -197,11 +197,20 @@ def _resource_rows(resource: Resource, depth: int = 0) -> list[dict]:
     return rows
 
 
+def _past_total(projects: list[Project]) -> float:
+    return sum(
+        p.past_breakdown.total_monthly_cost or 0.0
+        for p in projects
+        if p.past_breakdown
+    )
+
+
 def render(
     output: InfracostOutput,
     dest: str,
     estimates: Optional[dict[str, float]] = None,
     account_breakdown: Optional[dict[str, float]] = None,
+    support_plan: Optional[str] = None,
 ) -> None:
     env = Environment(
         loader=FileSystemLoader(str(Path(__file__).parent)),
@@ -214,6 +223,36 @@ def render(
     usage_based = _usage_based_items(output.projects, estimates)
     changes = _changes(output.projects)
     diff_total = _diff_total(output.projects)
+
+    # Support is a percentage of the total, so it's applied here rather than
+    # priced per resource. Note it only covers what bucksawz priced — if the
+    # report doesn't account for the whole bill, neither does this line.
+    support = None
+    if support_plan:
+        from ..pricing.support import (
+            effective_rate, is_floor_bound, plan_name, support_cost, support_delta,
+        )
+        usage = output.total_monthly_cost or 0.0
+        cost = support_cost(usage, support_plan)
+        rate = effective_rate(usage, support_plan)
+        floor_bound = is_floor_bound(usage, support_plan)
+        support = {
+            "plan": plan_name(support_plan),
+            "cost": cost,
+            "floor_bound": floor_bound,
+            # An effective rate is meaningless while the plan minimum is what's
+            # setting the price — say so instead of printing a large percentage.
+            "basis": (
+                "plan minimum" if floor_bound
+                else f"{rate * 100:.1f}% of usage" if rate is not None
+                else ""
+            ),
+            "total_with_support": usage + cost,
+        }
+        if diff_total is not None:
+            past = _past_total(output.projects)
+            support["delta"] = support_delta(past, past + diff_total, support_plan)
+            support["delta_with_support"] = diff_total + support["delta"]
 
     projects_data = []
     for p in output.projects:
@@ -251,6 +290,7 @@ def render(
         usage_based=usage_based,
         has_estimates=bool(estimates),
         changes=changes,
+        support=support,
         has_diff=diff_total is not None,
         diff_total=diff_total,
         diff_total_fmt=_fmt_delta(diff_total, output.currency),

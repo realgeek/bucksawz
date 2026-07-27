@@ -100,6 +100,7 @@ body {
 }
 .card .label { font-size: 0.72rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.06em; }
 .card .value { font-size: 1.4rem; font-weight: 700; margin-top: 0.2rem; }
+.card .sub { font-size: 0.7rem; color: #6b7280; margin-top: 0.15rem; }
 .card.green .value { color: #059669; }
 .card.blue  .value { color: #2563eb; }
 .card.amber .value { color: #d97706; }
@@ -324,6 +325,16 @@ tr.project-total td {
     <div class="card {% if diff_total > 0.005 %}red{% elif diff_total < -0.005 %}green{% endif %}">
       <div class="label">Monthly change</div>
       <div class="value">{{ diff_total_fmt }}</div>
+      {% if support and support.delta_with_support is defined %}
+      <div class="sub">{{ fmt_delta(support.delta_with_support) }} with support</div>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if support %}
+    <div class="card">
+      <div class="label">{{ support.plan }} support</div>
+      <div class="value">{{ support.cost | fmt_cost }}</div>
+      <div class="sub">{{ support.basis }} · {{ support.total_with_support | fmt_cost }} all in</div>
     </div>
     {% endif %}
     {% set total_res = output.summary.get('totalDetectedResources', 0) %}
@@ -372,7 +383,14 @@ tr.project-total td {
   {% if has_diff %}
   <a id="changes"></a>
   <div class="section-box">
-    <h3>Plan changes — {{ diff_total_fmt }} / mo</h3>
+    <h3>
+      Plan changes — {{ diff_total_fmt }} / mo
+      {% if support and support.delta_with_support is defined %}
+      <span style="font-weight:400;color:#6b7280;">
+        ({{ fmt_delta(support.delta_with_support) }} including {{ support.plan }} support)
+      </span>
+      {% endif %}
+    </h3>
     {% if changes %}
     <table>
       <thead>

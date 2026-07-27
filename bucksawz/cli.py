@@ -34,10 +34,20 @@ def cli():
     pass
 
 
+_support_plan_option = click.option(
+    "--support-plan",
+    type=click.Choice(["developer", "business", "enterprise-onramp", "enterprise"]),
+    default=None,
+    help="Add an AWS Support line: a tiered percentage of the priced total, and of "
+         "the plan delta. Omit to report infrastructure cost only.",
+)
+
+
 @cli.command()
 @click.option("--input", "-i", "input_path", required=True, help="Path to infracost JSON output")
 @click.option("--output", "-o", "output_path", default="report.html", show_default=True, help="Output HTML path")
-def report(input_path, output_path):
+@_support_plan_option
+def report(input_path, output_path, support_plan):
     """Generate a rich HTML cost report from infracost JSON output.
 
     If the input is an enriched JSON (produced by `bucksawz enrich`), cost
@@ -45,7 +55,12 @@ def report(input_path, output_path):
     """
     output = InfracostOutput.from_file(input_path)
     estimates, account_breakdown = _load_enrichment(input_path)
-    render(output, output_path, estimates=estimates, account_breakdown=account_breakdown)
+    render(
+        output, output_path,
+        estimates=estimates,
+        account_breakdown=account_breakdown,
+        support_plan=support_plan,
+    )
 
 
 @cli.command()
@@ -188,7 +203,8 @@ def prices_info():
 @click.option("--region", "-r", default="us-east-1", show_default=True, help="AWS region for price lookups")
 @click.option("--json-output", "json_output_path", default=None, help="Also write the priced Infracost-style JSON here")
 @click.option("--no-diff", is_flag=True, help="Report the plan's total only, skipping the cost delta.")
-def price_state(input_path, output_path, region, json_output_path, no_diff):
+@_support_plan_option
+def price_state(input_path, output_path, region, json_output_path, no_diff, support_plan):
     """Price a terraform plan/state directly against the local price cache.
 
     No Infracost API key required. Feed it `terraform show -json`:
@@ -218,15 +234,22 @@ def price_state(input_path, output_path, region, json_output_path, no_diff):
             json.dump(dataclasses.asdict(output), f, indent=2, default=str)
         click.echo(f"JSON written to {json_output_path}")
 
-    render(output, output_path)
+    render(output, output_path, support_plan=support_plan)
     click.echo(f"Priced {len(priced)} resource(s) from terraform state -> {output_path}")
     diff = output.projects[0].diff
     if diff is not None:
         delta = diff.total_monthly_cost or 0.0
-        click.echo(
+        line = (
             f"Plan changes {len(diff.resources)} resource(s): "
             f"{'+' if delta >= 0 else '-'}${abs(delta):,.2f}/mo"
         )
+        if support_plan:
+            from .pricing.support import support_delta
+            past = output.projects[0].past_breakdown
+            past_total = (past.total_monthly_cost or 0.0) if past else 0.0
+            with_support = delta + support_delta(past_total, past_total + delta, support_plan)
+            line += f" ({'+' if with_support >= 0 else '-'}${abs(with_support):,.2f} with support)"
+        click.echo(line)
 
 
 @cli.command("from-html")
