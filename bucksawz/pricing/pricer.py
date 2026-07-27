@@ -22,8 +22,9 @@ _ENGINE_MAP = {
     "aurora-postgresql": "Aurora PostgreSQL",
 }
 
-# Not sourced from the Pricing API cache (no ELB fetcher yet) — flat approximate
-# on-demand hourly rates, same across regions. LCU rate matches infracost's own.
+# Fallbacks used only when the price cache has no AWSELB rows for the region
+# (i.e. `prices update --services ELB` hasn't been run): flat approximate
+# us-east-1 on-demand rates. LCU rate matches infracost's own.
 _ELB_HOURLY_RATE = {
     "application": 0.0225,
     "network": 0.0225,
@@ -31,6 +32,10 @@ _ELB_HOURLY_RATE = {
     "classic": 0.025,
 }
 _ELB_LCU_PRICE = 0.008
+
+# Pricing API reports SQS and Lambda requests per single request, but the report
+# and the CloudWatch estimator both work in millions (see estimator.py).
+_PER_MILLION = 1_000_000
 
 
 def _unpriced(tf: TFResource, reason: str) -> Resource:
@@ -116,8 +121,15 @@ def _price_rds_instance(tf: TFResource, region: str, db=None) -> Optional[Resour
 
 def _price_lb(tf: TFResource, region: str, db=None) -> Optional[Resource]:
     values = tf.values
-    lb_type = (values.get("load_balancer_type") or "application").lower()
-    rate = _ELB_HOURLY_RATE.get(lb_type, _ELB_HOURLY_RATE["application"])
+    if tf.type == "aws_elb":
+        lb_type = "classic"  # the classic-ELB resource has no load_balancer_type
+    else:
+        lb_type = (values.get("load_balancer_type") or "application").lower()
+        if lb_type not in _ELB_HOURLY_RATE:
+            lb_type = "application"
+
+    hourly_row = price_db.get_price("AWSELB", region, f"elb:hourly:{lb_type}", db=db)
+    rate = hourly_row["price_usd"] if hourly_row else _ELB_HOURLY_RATE[lb_type]
     monthly_cost = rate * 730
     fixed_comp = CostComponent(
         name=f"{lb_type.capitalize()} load balancer",
@@ -129,23 +141,40 @@ def _price_lb(tf: TFResource, region: str, db=None) -> Optional[Resource]:
         monthly_cost=monthly_cost,
         usage_based=False,
     )
-    lcu_comp = CostComponent(
-        name="Load balancer capacity units",
-        unit="LCU",
-        hourly_quantity=None,
-        monthly_quantity=None,
-        price=_ELB_LCU_PRICE,
-        hourly_cost=None,
-        monthly_cost=None,
-        usage_based=True,
-    )
+
+    # Classic LBs bill data processed; the others bill LCUs.
+    if lb_type == "classic":
+        data_row = price_db.get_price("AWSELB", region, "elb:data:classic", db=db)
+        variable_comp = CostComponent(
+            name="Data processed",
+            unit="GB",
+            hourly_quantity=None,
+            monthly_quantity=None,
+            price=data_row["price_usd"] if data_row else None,
+            hourly_cost=None,
+            monthly_cost=None,
+            usage_based=True,
+        )
+    else:
+        lcu_row = price_db.get_price("AWSELB", region, f"elb:lcu:{lb_type}", db=db)
+        variable_comp = CostComponent(
+            name="Load balancer capacity units",
+            unit="LCU",
+            hourly_quantity=None,
+            monthly_quantity=None,
+            price=lcu_row["price_usd"] if lcu_row else _ELB_LCU_PRICE,
+            hourly_cost=None,
+            monthly_cost=None,
+            usage_based=True,
+        )
+
     return Resource(
         name=tf.address,
         resource_type=tf.type,
         tags=values.get("tags") or {},
         monthly_cost=monthly_cost,
         hourly_cost=rate,
-        cost_components=[fixed_comp, lcu_comp],
+        cost_components=[fixed_comp, variable_comp],
         sub_resources=[],
     )
 
@@ -243,7 +272,7 @@ def _price_lambda(tf: TFResource, region: str, db=None) -> Optional[Resource]:
         unit="1M requests",
         hourly_quantity=None,
         monthly_quantity=None,
-        price=req_row["price_usd"],
+        price=req_row["price_usd"] * _PER_MILLION,
         hourly_cost=None,
         monthly_cost=None,
         usage_based=True,
@@ -259,14 +288,128 @@ def _price_lambda(tf: TFResource, region: str, db=None) -> Optional[Resource]:
     )
 
 
+def _elasticache_node_count(values: dict) -> int:
+    """
+    Nodes billed for this resource. `aws_elasticache_cluster` uses
+    num_cache_nodes; replication groups use either num_cache_clusters or, in
+    cluster mode, num_node_groups × (1 primary + replicas_per_node_group).
+    """
+    for key in ("num_cache_nodes", "num_cache_clusters"):
+        count = values.get(key)
+        if count:
+            return int(count)
+    node_groups = values.get("num_node_groups")
+    if node_groups:
+        return int(node_groups) * (1 + int(values.get("replicas_per_node_group") or 0))
+    return 1
+
+
+def _price_elasticache(tf: TFResource, region: str, db=None) -> Optional[Resource]:
+    values = tf.values
+    node_type = values.get("node_type")
+    if not node_type:
+        return _unpriced(tf, "missing node_type")
+    # Both cluster and replication-group resources default to redis when unset.
+    engine = (values.get("engine") or "redis").lower()
+    row = price_db.get_price("AmazonElastiCache", region, f"elasticache:{node_type}:{engine}", db=db)
+    if row is None:
+        return _unpriced(tf, f"no price data for {node_type}/{engine} in {region}")
+
+    nodes = _elasticache_node_count(values)
+    price = row["price_usd"]
+    hourly_cost = price * nodes
+    monthly_cost = hourly_cost * 730
+    comp = CostComponent(
+        name=f"Cache node ({node_type}, {engine})",
+        unit="hours",
+        hourly_quantity=float(nodes),
+        monthly_quantity=nodes * 730.0,
+        price=price,
+        hourly_cost=hourly_cost,
+        monthly_cost=monthly_cost,
+        usage_based=False,
+    )
+    return Resource(
+        name=tf.address,
+        resource_type=tf.type,
+        tags=values.get("tags") or {},
+        monthly_cost=monthly_cost,
+        hourly_cost=hourly_cost,
+        cost_components=[comp],
+        sub_resources=[],
+    )
+
+
+def _price_s3_bucket(tf: TFResource, region: str, db=None) -> Optional[Resource]:
+    """
+    Standard-class storage only, and always usage-based: a bucket's size isn't
+    knowable from its terraform config, and lifecycle transitions to other
+    classes would need the object age distribution to model.
+    """
+    row = price_db.get_price("AmazonS3", region, "s3:storage:standard", db=db)
+    if row is None:
+        return _unpriced(tf, f"no S3 storage price data in {region}")
+    comp = CostComponent(
+        name="Standard storage",
+        unit="GB-months",
+        hourly_quantity=None,
+        monthly_quantity=None,
+        price=row["price_usd"],
+        hourly_cost=None,
+        monthly_cost=None,
+        usage_based=True,
+    )
+    return Resource(
+        name=tf.address,
+        resource_type=tf.type,
+        tags=tf.values.get("tags") or {},
+        monthly_cost=None,
+        hourly_cost=None,
+        cost_components=[comp],
+        sub_resources=[],
+    )
+
+
+def _price_sqs_queue(tf: TFResource, region: str, db=None) -> Optional[Resource]:
+    queue_type = "fifo" if tf.values.get("fifo_queue") else "standard"
+    row = price_db.get_price("AWSQueueService", region, f"sqs:requests:{queue_type}", db=db)
+    if row is None:
+        return _unpriced(tf, f"no SQS {queue_type} price data in {region}")
+    comp = CostComponent(
+        name=f"Requests ({queue_type})",
+        unit="1M requests",
+        hourly_quantity=None,
+        monthly_quantity=None,
+        price=row["price_usd"] * _PER_MILLION,
+        hourly_cost=None,
+        monthly_cost=None,
+        usage_based=True,
+    )
+    return Resource(
+        name=tf.address,
+        resource_type=tf.type,
+        tags=tf.values.get("tags") or {},
+        monthly_cost=None,
+        hourly_cost=None,
+        cost_components=[comp],
+        sub_resources=[],
+    )
+
+
 _PRICERS = {
     "aws_instance": _price_ec2_instance,
     "aws_launch_template": _price_ec2_instance,
     "aws_db_instance": _price_rds_instance,
     "aws_rds_cluster_instance": _price_rds_instance,
     "aws_lb": _price_lb,
+    "aws_alb": _price_lb,
+    "aws_elb": _price_lb,
     "aws_ecs_task_definition": _price_ecs_task,
     "aws_lambda_function": _price_lambda,
+    "aws_elasticache_cluster": _price_elasticache,
+    "aws_elasticache_replication_group": _price_elasticache,
+    "aws_s3_bucket": _price_s3_bucket,
+    "aws_sqs_queue": _price_sqs_queue,
 }
 
 

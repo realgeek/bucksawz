@@ -133,9 +133,9 @@ def prices():
 
 @prices.command("update")
 @click.option(
-    "--services", "-s", default=",".join(["ECS", "Lambda", "EC2", "RDS"]),
-    show_default=True,
-    help="Comma-separated list of services to update (ECS, Lambda, EC2, RDS).",
+    "--services", "-s", default=None,
+    help="Comma-separated list of services to update. Defaults to all of them: "
+         "ECS, Lambda, EC2, RDS, ElastiCache, S3, SQS, CloudWatch, ELB.",
 )
 @click.option(
     "--regions", "-r", default="us-east-1",
@@ -150,7 +150,9 @@ def prices_update(services, regions, aws_profile):
     Prices are fetched from the AWS Pricing API (global endpoint, us-east-1).
     """
     from .pricing.fetcher import fetch_all, ALL_SERVICES
-    svc_list = [s.strip() for s in services.split(",") if s.strip()]
+    svc_list = (
+        [s.strip() for s in services.split(",") if s.strip()] if services else ALL_SERVICES
+    )
     region_list = [r.strip() for r in regions.split(",") if r.strip()]
     click.echo(f"Fetching prices for services: {', '.join(svc_list)}")
     click.echo(f"Regions: {', '.join(region_list)}")

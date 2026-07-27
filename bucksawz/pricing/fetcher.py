@@ -113,6 +113,14 @@ def fetch_fargate(
     return stored
 
 
+# Matched exactly, not by substring: "AWS-Lambda-Storage-Duration" (ephemeral
+# storage GB-seconds), "AWS-Lambda-Edge-Duration" and the provisioned-concurrency
+# groups all contain "duration" and would otherwise overwrite the real compute
+# rate with an unrelated, much cheaper one. Same for "AWS-Lambda-Edge-Requests".
+_LAMBDA_REQUEST_GROUPS = {"aws-lambda-requests", "aws-lambda-requests-arm"}
+_LAMBDA_DURATION_GROUPS = {"aws-lambda-duration", "aws-lambda-duration-arm"}
+
+
 def fetch_lambda(
     region: str, profile: Optional[str] = None, db: Optional[Path] = None
 ) -> int:
@@ -133,9 +141,9 @@ def fetch_lambda(
         if result is None:
             continue
         unit, price, desc = result
-        if "request" in group:
+        if group in _LAMBDA_REQUEST_GROUPS:
             key = "lambda:requests"
-        elif "duration" in group:
+        elif group in _LAMBDA_DURATION_GROUPS:
             arch = attrs.get("processorArchitecture", "x86_64").replace(" ", "_").lower()
             key = f"lambda:duration:{arch}"
         else:

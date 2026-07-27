@@ -20,6 +20,8 @@ Infracost's HTML report is a single flat scroll — no navigation, no charts, no
   - Fills in usage-based cost estimates with real p50 actuals
   - 30-day cost forecast
   - 7-day local disk cache so repeated runs don't re-hit the AWS API
+- **Standalone pricing** — price a `terraform show -json` plan straight from a local AWS
+  Pricing API cache, no Infracost CLI or API key involved (`bucksawz price-state`)
 - **HTML → JSON converter** — reconstruct an Infracost JSON schema from an existing HTML report
 
 ## Installation
@@ -55,6 +57,19 @@ open report.html
 
 `enrich` is optional — `bucksawz report --input infracost.json` works without AWS
 credentials and produces the same HTML minus the historical actuals and estimates.
+
+### Without Infracost
+
+```bash
+# 1. Populate the local price cache (needs pricing:GetProducts)
+bucksawz prices update --regions us-east-1 --aws-profile my-profile
+
+# 2. Price a plan directly
+terraform show -json tfplan | bucksawz price-state --region us-east-1 -o report.html
+```
+
+Coverage is narrower than Infracost's — see [`price-state`](#price-state--price-a-terraform-plan-with-no-infracost)
+for the supported resource types.
 
 ### Starting from an existing HTML report (no JSON)
 
@@ -95,14 +110,47 @@ breakdowns appear automatically in the report — no extra flags needed.
 ### `prices` — local AWS Pricing API cache
 
 ```bash
-# Pre-fetch prices for key services (requires pricing:GetProducts)
+# Pre-fetch prices (requires pricing:GetProducts). Defaults to every supported
+# service: ECS, Lambda, EC2, RDS, ElastiCache, S3, SQS, CloudWatch, ELB.
 bucksawz prices update \
-  --services ECS,Lambda,EC2,RDS \
   --regions us-east-1,eu-west-2,ap-southeast-2 \
   --aws-profile my-profile
 
+# Or narrow it down
+bucksawz prices update --services EC2,RDS --regions us-east-1
+
 bucksawz prices info   # show DB location and row counts
 ```
+
+### `price-state` — price a Terraform plan with no Infracost
+
+```bash
+terraform show -json tfplan > plan.json
+bucksawz price-state --input plan.json --output report.html --region us-east-1
+
+# Or straight off a pipe, keeping the intermediate JSON
+terraform show -json tfplan | bucksawz price-state -o report.html --json-output priced.json
+```
+
+Prices come from the local cache, so run `bucksawz prices update` first. Resource
+types priced today:
+
+| Terraform type | Cost basis |
+| --- | --- |
+| `aws_instance`, `aws_launch_template` | on-demand instance hours (Linux, shared tenancy) |
+| `aws_db_instance`, `aws_rds_cluster_instance` | instance hours by engine + Single/Multi-AZ |
+| `aws_elasticache_cluster`, `aws_elasticache_replication_group` | node hours × node count |
+| `aws_ecs_task_definition` (Fargate) | vCPU + GB hours, x86 or ARM |
+| `aws_lb`, `aws_alb`, `aws_elb` | load balancer hours, plus LCU/data-processed unit price |
+| `aws_lambda_function` | request + GB-second unit prices (usage-based) |
+| `aws_s3_bucket` | Standard storage GB-month unit price (usage-based) |
+| `aws_sqs_queue` | request unit price, Standard or FIFO (usage-based) |
+
+Usage-based rows carry a unit price but no monthly total — quantity isn't knowable
+from a Terraform config. Anything unrecognised is listed as no-price rather than
+dropped, so the report still accounts for it. Everything else is out of scope for
+now: EBS volumes, NAT gateways, data transfer, and reserved/savings-plan discounts
+are not modelled.
 
 ### Cache management
 
@@ -163,12 +211,15 @@ Infracost itself is also Apache 2.0. bucksawz aims to be a drop-in replacement f
 
 - [x] Rich HTML report with sidebar ToC, charts, collapsible sections, search
 - [x] CloudWatch enrichment for usage-based costs (ALB LCU, Lambda, SQS, API Gateway)
-- [x] AWS Pricing API price cache (`bucksawz prices update`) for ECS/Fargate, Lambda, EC2, RDS
+- [x] AWS Pricing API price cache (`bucksawz prices update`) for ECS/Fargate, Lambda, EC2, RDS, ElastiCache, S3, SQS, CloudWatch, ELB
 - [x] Usage-based cost estimation: CloudWatch actuals × unit price → `~$X.XX/mo`
 - [x] Per-account breakdown for AWS Organizations / consolidated billing
 - [x] GitHub Actions workflow (PR comment with cost summary + artifact link)
-- [ ] Standalone pricing engine: estimate costs directly from Terraform plan JSON without Infracost
-- [ ] ELB/ALB/NLB pricing in the price cache (currently only in the estimator via infracost unit prices)
+- [x] Standalone pricing engine: estimate costs directly from Terraform plan JSON without Infracost (`bucksawz price-state`)
+- [x] ELB/ALB/NLB pricing in the price cache
+- [ ] Broaden `price-state` coverage: EBS volumes, NAT gateways, data transfer
+- [ ] CloudWatch metrics for S3 bucket size and CloudWatch Logs volume, so those unit prices resolve to real estimates
+- [ ] Multi-region `price-state` (currently one `--region` per run; a plan spanning providers is priced against one region)
 - [ ] Multi-region enrichment (currently one CE region per `enrich` run)
 - [ ] Account alias resolution (show account names alongside IDs)
 

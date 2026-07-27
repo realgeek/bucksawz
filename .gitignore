@@ -8,3 +8,6 @@ build/
 .eggs/
 *.html
 !bucksawz/report/template.html
+
+# local tooling state
+.memory/
