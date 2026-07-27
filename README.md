@@ -22,6 +22,8 @@ Infracost's HTML report is a single flat scroll — no navigation, no charts, no
   - 7-day local disk cache so repeated runs don't re-hit the AWS API
 - **Standalone pricing** — price a `terraform show -json` plan straight from a local AWS
   Pricing API cache, no Infracost CLI or API key involved (`bucksawz price-state`)
+- **Plan cost diffs** — what a plan does to the monthly bill, per resource
+  (added / removed / changed), from either a Terraform plan or an Infracost diff
 - **HTML → JSON converter** — reconstruct an Infracost JSON schema from an existing HTML report
 
 ## Installation
@@ -132,6 +134,19 @@ bucksawz price-state --input plan.json --output report.html --region us-east-1
 terraform show -json tfplan | bucksawz price-state -o report.html --json-output priced.json
 ```
 
+Given a **plan** (rather than a plain state export), the report also shows what the
+plan would do to your monthly bill — a total delta plus a per-resource
+added/removed/changed table. Pass `--no-diff` to report the absolute total only.
+
+```bash
+$ terraform show -json tfplan | bucksawz price-state -o report.html
+Priced 4 resource(s) from terraform state -> report.html
+Plan changes 4 resource(s): +$42.05/mo
+```
+
+The same section appears for Infracost input that carries a diff (`infracost diff
+--format json`), since bucksawz reads the standard `pastBreakdown` and `diff` fields.
+
 Prices come from the local cache, so run `bucksawz prices update` first. Resource
 types priced today:
 
@@ -217,11 +232,14 @@ Infracost itself is also Apache 2.0. bucksawz aims to be a drop-in replacement f
 - [x] GitHub Actions workflow (PR comment with cost summary + artifact link)
 - [x] Standalone pricing engine: estimate costs directly from Terraform plan JSON without Infracost (`bucksawz price-state`)
 - [x] ELB/ALB/NLB pricing in the price cache
+- [x] Plan cost diffs — per-resource delta from a Terraform plan or an Infracost `diff`
 - [ ] Broaden `price-state` coverage: EBS volumes, NAT gateways, data transfer
 - [ ] CloudWatch metrics for S3 bucket size and CloudWatch Logs volume, so those unit prices resolve to real estimates
 - [ ] Multi-region `price-state` (currently one `--region` per run; a plan spanning providers is priced against one region)
 - [ ] Multi-region enrichment (currently one CE region per `enrich` run)
 - [ ] Account alias resolution (show account names alongside IDs)
+- [ ] Put the plan delta in the GitHub Actions PR comment (the workflow still runs
+      `infracost breakdown`, which has no prior state to compare against)
 
 ## License
 

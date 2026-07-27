@@ -140,6 +140,20 @@ canvas { max-width: 100%; }
 .section-box td.cost { text-align: right; font-weight: 600; color: #1d4ed8; }
 .section-box td.resource-type { color: #6b7280; font-size: 0.75rem; }
 
+/* ── Plan changes ── */
+.section-box .resource-type { color: #6b7280; font-size: 0.72rem; margin-top: 0.1rem; }
+.section-box td.cost.muted, .section-box .muted { color: #6b7280; font-weight: 500; }
+.section-box td.cost.up   { color: #dc2626; }
+.section-box td.cost.down { color: #059669; }
+.change-tag {
+  display: inline-block; font-size: 0.68rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 0.1rem 0.4rem; border-radius: 4px; border: 1px solid;
+}
+.change-tag.added   { color: #059669; border-color: #a7f3d0; background: #ecfdf5; }
+.change-tag.removed { color: #dc2626; border-color: #fecaca; background: #fef2f2; }
+.change-tag.changed { color: #d97706; border-color: #fde68a; background: #fffbeb; }
+
 /* ── Search bar ── */
 .search-bar {
   display: flex;
@@ -277,6 +291,9 @@ tr.project-total td {
   <div class="section-head">Navigation</div>
   <ul>
     <li><a href="#summary">Summary</a></li>
+    {% if has_diff %}
+    <li><a href="#changes">Plan changes ({{ changes | length }})</a></li>
+    {% endif %}
     {% if account_breakdown | length > 1 %}
     <li><a href="#accounts">AWS accounts ({{ account_breakdown | length }})</a></li>
     {% endif %}
@@ -303,6 +320,12 @@ tr.project-total td {
       <div class="label">Total monthly</div>
       <div class="value">{{ total_monthly_cost }}</div>
     </div>
+    {% if has_diff %}
+    <div class="card {% if diff_total > 0.005 %}red{% elif diff_total < -0.005 %}green{% endif %}">
+      <div class="label">Monthly change</div>
+      <div class="value">{{ diff_total_fmt }}</div>
+    </div>
+    {% endif %}
     {% set total_res = output.summary.get('totalDetectedResources', 0) %}
     {% set est_res   = output.summary.get('totalSupportedResources', 0) %}
     {% set free_res  = output.summary.get('totalNoPriceResources', 0) %}
@@ -344,6 +367,56 @@ tr.project-total td {
       <canvas id="donutChart" height="260"></canvas>
     </div>
   </div>
+
+  <!-- Plan changes (diff output only) -->
+  {% if has_diff %}
+  <a id="changes"></a>
+  <div class="section-box">
+    <h3>Plan changes — {{ diff_total_fmt }} / mo</h3>
+    {% if changes %}
+    <table>
+      <thead>
+        <tr>
+          <th>Resource</th>
+          <th></th>
+          <th style="text-align:right">Before</th>
+          <th style="text-align:right">After</th>
+          <th style="text-align:right">Change</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in changes %}
+        <tr>
+          <td>
+            {{ c.name }}
+            <div class="resource-type">{{ c.resource_type }}</div>
+          </td>
+          <td><span class="change-tag {{ c.change }}">{{ c.change }}</span></td>
+          <td class="cost muted">{% if c.before is not none %}{{ c.before | fmt_cost }}{% else %}—{% endif %}</td>
+          <td class="cost muted">{% if c.after is not none %}{{ c.after | fmt_cost }}{% else %}—{% endif %}</td>
+          <td class="cost {% if c.delta > 0.005 %}up{% elif c.delta < -0.005 %}down{% endif %}">
+            {% if c.usage_based_only %}
+              <span class="muted" title="Priced per unit; the quantity isn't knowable from the plan">depends on usage</span>
+            {% else %}
+              {{ fmt_delta(c.delta) }}
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="font-size:0.83rem;color:#6b7280;margin:0;">
+      No cost-affecting changes in this plan.
+    </p>
+    {% endif %}
+    <p style="font-size:0.75rem;color:#6b7280;margin-top:0.5rem;">
+      Compares the plan's post-apply state against the prior state. Resources
+      whose cost is unchanged are omitted; added or removed resources are listed
+      even when their cost depends on usage.
+    </p>
+  </div>
+  {% endif %}
 
   <!-- Per-account breakdown (Org / consolidated billing only) -->
   {% if account_breakdown | length > 1 %}

@@ -187,22 +187,31 @@ def prices_info():
 @click.option("--output", "-o", "output_path", default="report.html", show_default=True, help="Output HTML path")
 @click.option("--region", "-r", default="us-east-1", show_default=True, help="AWS region for price lookups")
 @click.option("--json-output", "json_output_path", default=None, help="Also write the priced Infracost-style JSON here")
-def price_state(input_path, output_path, region, json_output_path):
+@click.option("--no-diff", is_flag=True, help="Report the plan's total only, skipping the cost delta.")
+def price_state(input_path, output_path, region, json_output_path, no_diff):
     """Price a terraform plan/state directly against the local price cache.
 
     No Infracost API key required. Feed it `terraform show -json`:
 
         terraform show -json tfplan | bucksawz price-state -o report.html
+
+    Given a plan, the report also shows the monthly cost delta the plan would
+    cause. A plain state export has nothing to compare against, so it doesn't.
     """
     import sys
     import dataclasses
-    from .pricing.tf_state import parse_json
+    from .pricing.tf_state import is_plan, parse_prior, parse_state
     from .pricing.pricer import build_output, price_resources
 
     text = sys.stdin.read() if input_path == "-" else open(input_path).read()
-    tf_resources = parse_json(text)
-    priced = price_resources(tf_resources, region)
-    output = build_output(priced, region)
+    data = json.loads(text)
+    priced = price_resources(parse_state(data), region)
+
+    priced_prior = None
+    if is_plan(data) and not no_diff:
+        priced_prior = price_resources(parse_prior(data), region)
+
+    output = build_output(priced, region, prior_resources=priced_prior)
 
     if json_output_path:
         with open(json_output_path, "w") as f:
@@ -211,6 +220,13 @@ def price_state(input_path, output_path, region, json_output_path):
 
     render(output, output_path)
     click.echo(f"Priced {len(priced)} resource(s) from terraform state -> {output_path}")
+    diff = output.projects[0].diff
+    if diff is not None:
+        delta = diff.total_monthly_cost or 0.0
+        click.echo(
+            f"Plan changes {len(diff.resources)} resource(s): "
+            f"{'+' if delta >= 0 else '-'}${abs(delta):,.2f}/mo"
+        )
 
 
 @cli.command("from-html")

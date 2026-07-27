@@ -3,6 +3,10 @@ Parse `terraform show -json` output into a flat list of AWS resource configs.
 
 Accepts either a plan (`planned_values.root_module`) or a full state
 (`values.root_module`) export, since both use the same module/resource shape.
+
+A plan also carries the pre-apply world, which `parse_prior` extracts so the
+two can be priced separately and diffed. `planned_values` is the post-apply
+view, so parse_state/parse_prior together give the "after" and "before".
 """
 from __future__ import annotations
 import json
@@ -44,6 +48,42 @@ def parse_state(data: dict) -> list[TFResource]:
         return []
     out: list[TFResource] = []
     _walk_module(root, out)
+    return [r for r in out if "aws" in r.provider_name]
+
+
+def is_plan(data: dict) -> bool:
+    """True if this export describes a proposed change rather than just a state."""
+    return bool(data.get("resource_changes")) or "prior_state" in data
+
+
+def parse_prior(data: dict) -> list[TFResource]:
+    """
+    Resource configs as they exist *before* the plan is applied.
+
+    Prefers `prior_state`, which is a complete state export in the same shape
+    parse_state already handles. Falls back to reconstructing from the `before`
+    side of `resource_changes`, which some exports carry without a prior_state
+    (a first apply against empty infrastructure has neither, and correctly
+    yields nothing).
+    """
+    prior_state = data.get("prior_state")
+    if prior_state:
+        return parse_state(prior_state)
+
+    out: list[TFResource] = []
+    for change in data.get("resource_changes") or []:
+        before = (change.get("change") or {}).get("before")
+        if not before:
+            continue  # null for creates
+        out.append(
+            TFResource(
+                address=change.get("address", ""),
+                type=change.get("type", ""),
+                name=change.get("name", ""),
+                provider_name=change.get("provider_name", ""),
+                values=before,
+            )
+        )
     return [r for r in out if "aws" in r.provider_name]
 
 

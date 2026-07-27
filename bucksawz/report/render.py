@@ -20,6 +20,16 @@ def _fmt_cost(value: Optional[float], currency: str = "USD") -> str:
     return f"{symbol}{value:.2f}"
 
 
+def _fmt_delta(value: Optional[float], currency: str = "USD") -> str:
+    """Signed cost, for diff columns. Zero is rendered without a sign."""
+    if value is None:
+        return ""
+    if abs(value) < 0.005:
+        return _fmt_cost(0.0, currency)
+    sign = "+" if value > 0 else "−"  # U+2212, so the minus lines up with digits
+    return f"{sign}{_fmt_cost(abs(value), currency)}"
+
+
 def _service_breakdown(projects: list[Project]) -> dict[str, float]:
     totals: dict[str, float] = {}
     for p in projects:
@@ -82,6 +92,54 @@ def _usage_based_items(
                             "estimated_cost": None,
                         })
     return items
+
+
+def _changes(projects: list[Project]) -> list[dict]:
+    """
+    Flatten every project's `diff` breakdown into display rows, classifying each
+    entry as added / removed / changed by whether it appears on both sides.
+
+    Populated for Infracost diff output and for `price-state` against a plan;
+    empty otherwise, which is what hides the section.
+    """
+    rows: list[dict] = []
+    for p in projects:
+        if not p.diff:
+            continue
+        past = {r.name: r for r in (p.past_breakdown.resources if p.past_breakdown else [])}
+        current = {r.name: r for r in (p.breakdown.resources if p.breakdown else [])}
+        for r in p.diff.resources:
+            before, after = past.get(r.name), current.get(r.name)
+            if before is None:
+                change = "added"
+            elif after is None:
+                change = "removed"
+            else:
+                change = "changed"
+            delta = r.total_monthly_cost()
+            rows.append({
+                "project": p.name,
+                "name": r.name,
+                "resource_type": r.resource_type,
+                "change": change,
+                "before": before.total_monthly_cost() if before else None,
+                "after": after.total_monthly_cost() if after else None,
+                "delta": delta,
+                # A new S3 bucket or Lambda has a real cost that simply isn't
+                # knowable up front — flag it rather than implying it's free.
+                "usage_based_only": (
+                    abs(delta) < 1e-9
+                    and bool(r.cost_components)
+                    and all(c.usage_based for c in r.cost_components)
+                ),
+            })
+    rows.sort(key=lambda x: -abs(x["delta"]))
+    return rows
+
+
+def _diff_total(projects: list[Project]) -> Optional[float]:
+    totals = [p.diff.total_monthly_cost or 0.0 for p in projects if p.diff]
+    return sum(totals) if totals else None
 
 
 def _unsupported_resources(projects: list[Project]) -> dict[str, int]:
@@ -154,6 +212,8 @@ def render(
     svc_breakdown = _service_breakdown(output.projects)
     top_resources = _top_resources(output.projects)
     usage_based = _usage_based_items(output.projects, estimates)
+    changes = _changes(output.projects)
+    diff_total = _diff_total(output.projects)
 
     projects_data = []
     for p in output.projects:
@@ -190,6 +250,11 @@ def render(
         top_resources=top_resources,
         usage_based=usage_based,
         has_estimates=bool(estimates),
+        changes=changes,
+        has_diff=diff_total is not None,
+        diff_total=diff_total,
+        diff_total_fmt=_fmt_delta(diff_total, output.currency),
+        fmt_delta=lambda v: _fmt_delta(v, output.currency),
         account_breakdown=sorted_accounts,
         account_breakdown_json=json.dumps(sorted_accounts),
         project_costs_json=json.dumps({

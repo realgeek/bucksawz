@@ -426,24 +426,136 @@ def price_resources(resources: list[TFResource], region: str, db=None) -> list[R
     return priced
 
 
-def build_output(resources: list[Resource], region: str) -> InfracostOutput:
-    """Wrap priced resources in the same InfracostOutput schema `report` consumes."""
+# Costs are floats derived from multiplication, so exact equality is unsafe.
+_EPSILON = 1e-9
+
+
+def _diff_components(
+    before: Optional[Resource], after: Optional[Resource]
+) -> list[CostComponent]:
+    """
+    Component-level deltas, matched by component name. Usage-based components
+    keep a null cost (their quantity is unknown either way) but are carried
+    through so an added or removed resource still shows what it consists of.
+    """
+    b = {c.name: c for c in (before.cost_components if before else [])}
+    a = {c.name: c for c in (after.cost_components if after else [])}
+    whole_resource = before is None or after is None
+
+    out: list[CostComponent] = []
+    for name in list(a) + [n for n in b if n not in a]:
+        bc, ac = b.get(name), a.get(name)
+        ref = ac or bc
+        delta = ((ac.monthly_cost if ac else None) or 0.0) - ((bc.monthly_cost if bc else None) or 0.0)
+        if not whole_resource and abs(delta) <= _EPSILON and not ref.usage_based:
+            continue
+        out.append(
+            CostComponent(
+                name=name,
+                unit=ref.unit,
+                hourly_quantity=None,
+                monthly_quantity=ac.monthly_quantity if ac else None,
+                price=ref.price,
+                hourly_cost=None,
+                monthly_cost=None if ref.usage_based else delta,
+                usage_based=ref.usage_based,
+            )
+        )
+    return out
+
+
+def diff_resources(prior: list[Resource], planned: list[Resource]) -> list[Resource]:
+    """
+    Per-resource cost deltas between two priced breakdowns, matched by address.
+
+    Each returned Resource carries the *change* in monthly cost, so a removal
+    is negative. Resources whose cost is unaffected are omitted; ones that were
+    added or removed are kept even at a zero delta, since a new usage-based
+    resource (an S3 bucket, a Lambda) is still worth surfacing.
+    """
+    prior_by_name = {r.name: r for r in prior}
+    planned_by_name = {r.name: r for r in planned}
+    ordered = list(planned_by_name) + [n for n in prior_by_name if n not in planned_by_name]
+
+    out: list[Resource] = []
+    for name in ordered:
+        before, after = prior_by_name.get(name), planned_by_name.get(name)
+        delta = (
+            (after.total_monthly_cost() if after else 0.0)
+            - (before.total_monthly_cost() if before else 0.0)
+        )
+        whole_resource = before is None or after is None
+        if not whole_resource and abs(delta) <= _EPSILON:
+            continue
+        ref = after or before
+        out.append(
+            Resource(
+                name=name,
+                resource_type=ref.resource_type,
+                tags=ref.tags,
+                monthly_cost=delta,
+                hourly_cost=delta / 730 if delta else 0.0,
+                cost_components=_diff_components(before, after),
+                sub_resources=[],
+                is_supported=ref.is_supported,
+                no_price=ref.no_price,
+            )
+        )
+    return out
+
+
+def build_output(
+    resources: list[Resource],
+    region: str,
+    prior_resources: Optional[list[Resource]] = None,
+) -> InfracostOutput:
+    """
+    Wrap priced resources in the same InfracostOutput schema `report` consumes.
+
+    Passing `prior_resources` (from a plan's pre-apply state) also populates
+    `past_breakdown` and `diff`, exactly as Infracost's own diff output does.
+    """
     total_monthly = sum(r.total_monthly_cost() for r in resources)
     breakdown = Breakdown(
         resources=resources,
         total_hourly_cost=total_monthly / 730 if total_monthly else 0.0,
         total_monthly_cost=total_monthly,
     )
+
+    past_breakdown = None
+    diff = None
+    if prior_resources is not None:
+        past_total = sum(r.total_monthly_cost() for r in prior_resources)
+        past_breakdown = Breakdown(
+            resources=prior_resources,
+            total_hourly_cost=past_total / 730 if past_total else 0.0,
+            total_monthly_cost=past_total,
+        )
+        delta_total = total_monthly - past_total
+        diff = Breakdown(
+            resources=diff_resources(prior_resources, resources),
+            total_hourly_cost=delta_total / 730 if delta_total else 0.0,
+            total_monthly_cost=delta_total,
+        )
+
     project = Project(
         name=f"terraform-state-{region}",
         metadata={"path": "terraform show -json", "type": "terraform_state"},
-        past_breakdown=None,
+        past_breakdown=past_breakdown,
         breakdown=breakdown,
-        diff=None,
+        diff=diff,
         summary={},
     )
     supported = sum(1 for r in resources if r.is_supported)
     no_price = sum(1 for r in resources if r.no_price)
+    summary = {
+        "totalDetectedResources": len(resources),
+        "totalSupportedResources": supported,
+        "totalNoPriceResources": no_price,
+        "totalUnsupportedResources": len(resources) - supported - no_price,
+    }
+    if diff is not None:
+        summary["totalChangedResources"] = len(diff.resources)
     return InfracostOutput(
         version="bucksawz-price-state-1",
         currency="USD",
@@ -451,10 +563,5 @@ def build_output(resources: list[Resource], region: str) -> InfracostOutput:
         total_hourly_cost=breakdown.total_hourly_cost,
         total_monthly_cost=total_monthly,
         time_generated=datetime.now(timezone.utc).isoformat(),
-        summary={
-            "totalDetectedResources": len(resources),
-            "totalSupportedResources": supported,
-            "totalNoPriceResources": no_price,
-            "totalUnsupportedResources": len(resources) - supported - no_price,
-        },
+        summary=summary,
     )
