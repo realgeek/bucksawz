@@ -614,6 +614,110 @@ def _price_secretsmanager_secret(tf: TFResource, region: str, db=None) -> Option
     )
 
 
+def _price_route53_zone(tf: TFResource, region: str, db=None) -> Optional[Resource]:
+    """
+    A hosted zone's base price is fixed, like a Secrets Manager secret's — known
+    from config alone. Query volume isn't, so that component stays usage-based.
+    Uses the first-tier zone/query rate; see fetch_route53 for why.
+    """
+    row = price_db.get_price("AmazonRoute53", region, "route53:hostedzone", db=db)
+    if row is None:
+        return _unpriced(tf, f"no Route 53 price data in {region}")
+    price = row["price_usd"]
+    fixed_comp = CostComponent(
+        name="Hosted zone", unit="months",
+        hourly_quantity=None, monthly_quantity=1.0,
+        price=price, hourly_cost=price / 730, monthly_cost=price, usage_based=False,
+    )
+    query_row = price_db.get_price("AmazonRoute53", region, "route53:queries", db=db)
+    query_comp = CostComponent(
+        name="Standard queries", unit="1M queries",
+        hourly_quantity=None, monthly_quantity=None,
+        price=query_row["price_usd"] * _PER_MILLION if query_row else None,
+        hourly_cost=None, monthly_cost=None, usage_based=True,
+    )
+    return Resource(
+        name=tf.address, resource_type=tf.type, tags=tf.values.get("tags") or {},
+        monthly_cost=price, hourly_cost=price / 730,
+        cost_components=[fixed_comp, query_comp], sub_resources=[],
+    )
+
+
+def _price_kms_key(tf: TFResource, region: str, db=None) -> Optional[Resource]:
+    """Like Route 53/Secrets Manager: the per-key price is fixed; request volume isn't."""
+    row = price_db.get_price("awskms", region, "kms:key", db=db)
+    if row is None:
+        return _unpriced(tf, f"no KMS price data in {region}")
+    price = row["price_usd"]
+    fixed_comp = CostComponent(
+        name="Customer managed key", unit="months",
+        hourly_quantity=None, monthly_quantity=1.0,
+        price=price, hourly_cost=price / 730, monthly_cost=price, usage_based=False,
+    )
+    req_row = price_db.get_price("awskms", region, "kms:requests", db=db)
+    requests_comp = CostComponent(
+        name="API requests (symmetric)", unit="1M requests",
+        hourly_quantity=None, monthly_quantity=None,
+        price=req_row["price_usd"] * _PER_MILLION if req_row else None,
+        hourly_cost=None, monthly_cost=None, usage_based=True,
+    )
+    return Resource(
+        name=tf.address, resource_type=tf.type, tags=tf.values.get("tags") or {},
+        monthly_cost=price, hourly_cost=price / 730,
+        cost_components=[fixed_comp, requests_comp], sub_resources=[],
+    )
+
+
+def _price_waf_web_acl(tf: TFResource, region: str, db=None) -> Optional[Resource]:
+    """
+    Web ACL and rule count are both fixed, known-from-config charges (rule
+    count comes straight from the `rule` blocks); requests are usage-based and
+    priced at WAF's flat baseline rate (see fetch_waf's WCU-tier caveat).
+    """
+    values = tf.values
+    webacl_row = price_db.get_price("awswaf", region, "waf:webacl", db=db)
+    if webacl_row is None:
+        return _unpriced(tf, f"no WAF price data in {region}")
+    webacl_price = webacl_row["price_usd"]
+    comps = [CostComponent(
+        name="Web ACL", unit="months",
+        hourly_quantity=None, monthly_quantity=1.0,
+        price=webacl_price, hourly_cost=webacl_price / 730,
+        monthly_cost=webacl_price, usage_based=False,
+    )]
+    monthly_cost = webacl_price
+
+    rules = values.get("rule") or []
+    if isinstance(rules, dict):
+        rules = [rules]
+    if rules:
+        rule_row = price_db.get_price("awswaf", region, "waf:rule", db=db)
+        if rule_row is not None:
+            rule_price = rule_row["price_usd"]
+            rules_cost = rule_price * len(rules)
+            comps.append(CostComponent(
+                name=f"Rules ({len(rules)})", unit="rule-months",
+                hourly_quantity=None, monthly_quantity=float(len(rules)),
+                price=rule_price, hourly_cost=None,
+                monthly_cost=rules_cost, usage_based=False,
+            ))
+            monthly_cost += rules_cost
+
+    req_row = price_db.get_price("awswaf", region, "waf:requests", db=db)
+    comps.append(CostComponent(
+        name="Requests", unit="1M requests",
+        hourly_quantity=None, monthly_quantity=None,
+        price=req_row["price_usd"] * _PER_MILLION if req_row else None,
+        hourly_cost=None, monthly_cost=None, usage_based=True,
+    ))
+
+    return Resource(
+        name=tf.address, resource_type=tf.type, tags=values.get("tags") or {},
+        monthly_cost=monthly_cost, hourly_cost=monthly_cost / 730,
+        cost_components=comps, sub_resources=[],
+    )
+
+
 _PRICERS = {
     "aws_instance": _price_ec2_instance,
     "aws_launch_template": _price_ec2_instance,
@@ -630,6 +734,9 @@ _PRICERS = {
     "aws_s3_bucket": _price_s3_bucket,
     "aws_sqs_queue": _price_sqs_queue,
     "aws_secretsmanager_secret": _price_secretsmanager_secret,
+    "aws_route53_zone": _price_route53_zone,
+    "aws_kms_key": _price_kms_key,
+    "aws_wafv2_web_acl": _price_waf_web_acl,
 }
 
 

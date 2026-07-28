@@ -38,6 +38,13 @@ def tmp_db(tmp_path) -> Path:
     price_db.upsert("AmazonEC2", "us-east-1", "ebs:throughput:gp3", "MiBps-Mo", 0.04, db=db)
     price_db.upsert("AWSSecretsManager", "us-east-1", "secretsmanager:secret", "Secrets", 0.40, db=db)
     price_db.upsert("AWSSecretsManager", "us-east-1", "secretsmanager:requests", "API Requests", 5e-6, db=db)
+    price_db.upsert("AmazonRoute53", "us-east-1", "route53:hostedzone", "HostedZone", 0.50, db=db)
+    price_db.upsert("AmazonRoute53", "us-east-1", "route53:queries", "Queries", 4e-7, db=db)
+    price_db.upsert("awskms", "us-east-1", "kms:key", "Keys", 1.0, db=db)
+    price_db.upsert("awskms", "us-east-1", "kms:requests", "Requests", 3e-6, db=db)
+    price_db.upsert("awswaf", "us-east-1", "waf:webacl", "Month", 5.0, db=db)
+    price_db.upsert("awswaf", "us-east-1", "waf:rule", "Month", 1.0, db=db)
+    price_db.upsert("awswaf", "us-east-1", "waf:requests", "Request", 6e-7, db=db)
     return db
 
 
@@ -300,6 +307,95 @@ def test_secretsmanager_secret_has_fixed_and_usage_based_components(tmp_db):
 
 def test_secretsmanager_secret_unpriced_without_cached_price(empty_db):
     tf = _tf("aws_secretsmanager_secret", {})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── Route 53 ─────────────────────────────────────────────────────────────────
+
+
+def test_route53_zone_flat_monthly_cost(tmp_db):
+    """Like a Secrets Manager secret, a hosted zone's base price is known from
+    config alone; query volume is not."""
+    tf = _tf("aws_route53_zone", {"name": "example.com"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(0.50)
+    fixed, queries = resource.cost_components
+    assert not fixed.usage_based
+    assert queries.usage_based
+    assert queries.monthly_cost is None
+    assert queries.price == pytest.approx(0.40)
+
+
+def test_route53_zone_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_route53_zone", {"name": "example.com"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── KMS ──────────────────────────────────────────────────────────────────────
+
+
+def test_kms_key_flat_monthly_cost(tmp_db):
+    tf = _tf("aws_kms_key", {"description": "app secrets"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(1.0)
+    fixed, requests = resource.cost_components
+    assert not fixed.usage_based
+    assert requests.usage_based
+    assert requests.price == pytest.approx(3.0)
+
+
+def test_kms_key_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_kms_key", {})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── WAF ──────────────────────────────────────────────────────────────────────
+
+
+def test_waf_web_acl_with_no_rules(tmp_db):
+    tf = _tf("aws_wafv2_web_acl", {"name": "api-waf"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(5.0)
+    names = [c.name for c in resource.cost_components]
+    assert names == ["Web ACL", "Requests"]
+
+
+def test_waf_web_acl_rule_count_folded_into_total(tmp_db):
+    tf = _tf("aws_wafv2_web_acl", {
+        "name": "api-waf",
+        "rule": [{"name": "rate-limit"}, {"name": "sql-injection"}, {"name": "geo-block"}],
+    })
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.monthly_cost == pytest.approx(5.0 + 3 * 1.0)
+    rules_comp = next(c for c in resource.cost_components if c.name.startswith("Rules"))
+    assert rules_comp.monthly_quantity == 3.0
+    assert rules_comp.monthly_cost == pytest.approx(3.0)
+
+
+def test_waf_web_acl_bare_dict_single_rule(tmp_db):
+    """A single `rule` block can show up as a bare dict rather than a list of one."""
+    tf = _tf("aws_wafv2_web_acl", {"name": "api-waf", "rule": {"name": "rate-limit"}})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.monthly_cost == pytest.approx(5.0 + 1.0)
+
+
+def test_waf_web_acl_request_component_is_usage_based(tmp_db):
+    tf = _tf("aws_wafv2_web_acl", {"name": "api-waf"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    requests_comp = next(c for c in resource.cost_components if c.name == "Requests")
+    assert requests_comp.usage_based
+    assert requests_comp.monthly_cost is None
+    assert requests_comp.price == pytest.approx(0.60)
+
+
+def test_waf_web_acl_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_wafv2_web_acl", {"name": "api-waf"})
     [resource] = price_resources([tf], "us-east-1", db=empty_db)
     assert resource.no_price
 

@@ -113,7 +113,8 @@ breakdowns appear automatically in the report — no extra flags needed.
 
 ```bash
 # Pre-fetch prices (requires pricing:GetProducts). Defaults to every supported
-# service: ECS, Lambda, EC2, EBS, RDS, ElastiCache, S3, SQS, CloudWatch, ELB, SecretsManager.
+# service: ECS, Lambda, EC2, EBS, RDS, ElastiCache, S3, SQS, CloudWatch, ELB,
+# SecretsManager, Route53, KMS, WAF.
 bucksawz prices update \
   --regions us-east-1,eu-west-2,ap-southeast-2 \
   --aws-profile my-profile
@@ -162,6 +163,9 @@ types priced today:
 | `aws_s3_bucket` | Standard storage GB-month unit price (usage-based) |
 | `aws_sqs_queue` | request unit price, Standard or FIFO (usage-based) |
 | `aws_secretsmanager_secret` | flat $0.40/mo per secret, plus API request unit price (usage-based) |
+| `aws_route53_zone` | flat hosted zone rate (first-tier), plus standard query unit price (usage-based) |
+| `aws_kms_key` | flat $1/mo per customer-managed key, plus symmetric API request unit price (usage-based) |
+| `aws_wafv2_web_acl` | flat web ACL rate + $1/mo per `rule` block, plus baseline request unit price (usage-based) |
 
 EBS volumes attached to an instance or launch template are priced as sub-resources
 of it and folded into its total; a standalone `aws_ebs_volume` prices the same way
@@ -169,10 +173,13 @@ on its own. gp3's first 3,000 IOPS / 125 MiB/s are included in the storage price
 only usage above that is billed separately; io1 has no free IOPS tier; io2 IOPS is
 billed across three AWS-fixed tiers.
 
-Unlike the other usage-based resources, a Secrets Manager secret's storage cost is
-always known from Terraform config alone — it's a flat per-secret rate independent
-of the secret's size or content — so `monthly_cost` is populated even though the
-API-request component stays usage-based.
+Unlike the other usage-based resources, a Secrets Manager secret, Route 53 hosted
+zone, KMS key, and WAF web ACL/rule all have a base price that's fixed and known
+from Terraform config alone — so `monthly_cost` is populated for those even though
+their request/query volume components stay usage-based. Route 53 pricing uses only
+the first tier (first 25 zones, first 1B queries/mo); WAF's request price uses the
+flat baseline rate rather than modelling its Web ACL Capacity Unit (WCU) tiers,
+which depend on rule complexity bucksawz can't compute from Terraform config alone.
 
 Usage-based rows carry a unit price but no monthly total — quantity isn't knowable
 from a Terraform config. Anything unrecognised is listed as no-price rather than
@@ -248,7 +255,8 @@ Infracost itself is also Apache 2.0. bucksawz aims to be a drop-in replacement f
 - [x] Plan cost diffs — per-resource delta from a Terraform plan or an Infracost `diff`
 - [x] EBS pricing: storage (7 volume types), provisioned IOPS/throughput, root/attached volumes
 - [x] Secrets Manager pricing: flat per-secret rate + usage-based API requests
-- [ ] Broaden `price-state` coverage further: NAT gateways, data transfer, Config, Route 53, KMS, WAF
+- [x] Route 53, KMS, and WAFv2 pricing: flat base rates (zone/key/ACL+rules) + usage-based request/query components
+- [ ] Broaden `price-state` coverage further: NAT gateways, data transfer, Config
 - [ ] CloudWatch metrics for S3 bucket size and CloudWatch Logs volume, so those unit prices resolve to real estimates
 - [ ] Multi-region `price-state` (currently one `--region` per run; a plan spanning providers is priced against one region)
 - [ ] Multi-region enrichment (currently one CE region per `enrich` run)

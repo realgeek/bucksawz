@@ -626,13 +626,137 @@ def test_fetch_secretsmanager_ignores_unknown_product_family(fake_pricing, tmp_d
     assert fetcher.fetch_secretsmanager("us-east-1", db=tmp_db) == 0
 
 
+# ── Route 53 ─────────────────────────────────────────────────────────────────
+
+
+def test_fetch_route53_hosted_zone_uses_first_tier(fake_pricing, tmp_db):
+    fake_pricing([
+        _product("DNS Zone", {"usagetype": "HostedZone"}, [
+            _dim(0.10, unit="HostedZone", desc="additional zones", begin_range="25"),
+            _dim(0.50, unit="HostedZone", desc="first 25 zones", begin_range="0"),
+        ]),
+    ])
+    assert fetcher.fetch_route53("us-east-1", db=tmp_db) == 1
+    row = price_db.get_price("AmazonRoute53", "us-east-1", "route53:hostedzone", db=tmp_db)
+    assert row["price_usd"] == pytest.approx(0.50)
+
+
+def test_fetch_route53_ignores_extra_rrsets(fake_pricing, tmp_db):
+    fake_pricing([_product("DNS Zone", {"usagetype": "Global-RRSets"}, _dim(0.0015))])
+    assert fetcher.fetch_route53("us-east-1", db=tmp_db) == 0
+
+
+def test_fetch_route53_standard_queries_first_tier(fake_pricing, tmp_db):
+    fake_pricing([
+        _product("DNS Query", {
+            "usagetype": "DNS-Queries", "routingType": "Standard", "routingTarget": "External",
+        }, [
+            _dim(0.0000002, unit="Queries", desc="over 1B", begin_range="1000000000"),
+            _dim(0.0000004, unit="Queries", desc="first 1B", begin_range="0"),
+        ]),
+    ])
+    assert fetcher.fetch_route53("us-east-1", db=tmp_db) == 1
+    row = price_db.get_price("AmazonRoute53", "us-east-1", "route53:queries", db=tmp_db)
+    assert row["price_usd"] == pytest.approx(0.0000004)
+
+
+def test_fetch_route53_ignores_resolver_query_pricing(fake_pricing, tmp_db):
+    """Resolver's region-scoped query pricing shares the DNS Query family but has
+    no routingType attribute and a region-prefixed usagetype."""
+    fake_pricing([_product("DNS Query", {"usagetype": "USE1-DNS-Queries"}, _dim(0.0000004))])
+    assert fetcher.fetch_route53("us-east-1", db=tmp_db) == 0
+
+
+def test_fetch_route53_ignores_non_standard_routing(fake_pricing, tmp_db):
+    fake_pricing([
+        _product("DNS Query", {
+            "usagetype": "LBR-Queries", "routingType": "Latency Based Routing", "routingTarget": "External",
+        }, _dim(0.0000006)),
+    ])
+    assert fetcher.fetch_route53("us-east-1", db=tmp_db) == 0
+
+
+# ── KMS ──────────────────────────────────────────────────────────────────────
+
+
+def test_fetch_kms_key_and_standard_requests(fake_pricing, tmp_db):
+    fake_pricing([
+        _product("Encryption Key", {"usagetype": "USE1-KMS-Keys"}, _dim(1.0, unit="Keys")),
+        _product("API Request", {"usagetype": "USE1-KMS-Requests"}, _dim(0.000003, unit="Requests")),
+    ])
+    assert fetcher.fetch_kms("us-east-1", db=tmp_db) == 2
+    assert _keys("awskms", "us-east-1", tmp_db) == {
+        "kms:key": pytest.approx(1.0),
+        "kms:requests": pytest.approx(0.000003),
+    }
+
+
+def test_fetch_kms_ignores_asymmetric_and_datakeypair_requests(fake_pricing, tmp_db):
+    """These carry no productFamily at all and cost 5-400x the standard rate —
+    a substring match on usagetype would risk picking one up instead."""
+    fake_pricing([
+        _product("", {"usagetype": "USE1-KMS-Requests-Asymmetric-RSA_2048"}, _dim(0.000003)),
+        _product("", {"usagetype": "USE1-KMS-Requests-Asymmetric"}, _dim(0.000015)),
+        _product("", {"usagetype": "USE1-KMS-Requests-GenerateDatakeyPair-RSA"}, _dim(0.0012)),
+        _product("", {"usagetype": "USE1-KMS-Requests-GenerateDatakeyPair-ECC"}, _dim(0.00001)),
+    ])
+    assert fetcher.fetch_kms("us-east-1", db=tmp_db) == 0
+
+
+# ── WAF ──────────────────────────────────────────────────────────────────────
+
+
+def test_fetch_waf_webacl_rule_and_baseline_request(fake_pricing, tmp_db):
+    fake_pricing([
+        _product("Web Application Firewall",
+                 {"usagetype": "USE1-WebACLV2", "group": "Web ACL"}, _dim(5.0, unit="Month")),
+        _product("Web Application Firewall",
+                 {"usagetype": "USE1-RuleV2", "group": "Rule"}, _dim(1.0, unit="Month")),
+        _product("Web Application Firewall",
+                 {"usagetype": "USE1-RequestV2-Tier0", "group": "Request"},
+                 _dim(0.0000006, unit="Request")),
+    ])
+    assert fetcher.fetch_waf("us-east-1", db=tmp_db) == 3
+    assert _keys("awswaf", "us-east-1", tmp_db) == {
+        "waf:webacl": pytest.approx(5.0),
+        "waf:rule": pytest.approx(1.0),
+        "waf:requests": pytest.approx(0.0000006),
+    }
+
+
+def test_fetch_waf_ignores_classic_webacl_and_rule(fake_pricing, tmp_db):
+    """Classic WAF (aws_waf, not aws_wafv2) shares the same $5/$1 prices under
+    non-V2 usagetypes — bucksawz only supports aws_wafv2_web_acl."""
+    fake_pricing([
+        _product("Web Application Firewall",
+                 {"usagetype": "USE1-WebACL", "group": "Web ACL"}, _dim(5.0)),
+        _product("Web Application Firewall",
+                 {"usagetype": "USE1-Rule", "group": "Rule"}, _dim(1.0)),
+    ])
+    assert fetcher.fetch_waf("us-east-1", db=tmp_db) == 0
+
+
+def test_fetch_waf_ignores_shield_protected_and_higher_wcu_tiers(fake_pricing, tmp_db):
+    fake_pricing([
+        _product("Web Application Firewall",
+                 {"usagetype": "USE1-ShieldProtected-RequestV2-Tier2-2000WCU",
+                  "group": "Request (Shield Protected)"}, _dim(0.0000002)),
+        _product("Web Application Firewall",
+                 {"usagetype": "USE1-RequestV2-Tier4-3000WCU", "group": "Request"}, _dim(0.0000012)),
+        _product("Web Application Firewall",
+                 {"usagetype": "USE1-AMR-BotControl-Request", "group": "AMR Bot Control Request"},
+                 _dim(0.000001)),
+    ])
+    assert fetcher.fetch_waf("us-east-1", db=tmp_db) == 0
+
+
 # ── fetch_all ────────────────────────────────────────────────────────────────
 
 
 def test_all_services_matches_fetcher_registry():
     assert set(fetcher.ALL_SERVICES) == {
         "ECS", "Lambda", "EC2", "EBS", "RDS", "ElastiCache", "S3", "SQS", "CloudWatch", "ELB",
-        "SecretsManager",
+        "SecretsManager", "Route53", "KMS", "WAF",
     }
 
 

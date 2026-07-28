@@ -568,6 +568,146 @@ def fetch_secretsmanager(
     return stored
 
 
+def fetch_route53(
+    region: str, profile: Optional[str] = None, db: Optional[Path] = None
+) -> int:
+    """
+    Route 53 hosted zone and standard DNS query prices. Unlike every other
+    fetcher here, Route 53's hosted-zone and standard-query pricing is global
+    (regionCode is "", location is "Any") rather than per-region — the same
+    price gets stored under whatever `region` key is requested, matching how
+    `prices update` calls every fetcher once per region regardless.
+
+    Only the first pricing tier of each is stored: $0.50/zone (of the first 25
+    per account) and $0.40 per million standard queries (of the first 1
+    billion/month) — same simplification as S3/CloudWatch's first-tier
+    pricing, since tier occupancy depends on account-wide totals bucksawz
+    can't see from a single Terraform plan.
+
+    The "DNS Query" product family also carries Route 53 Resolver's
+    region-scoped query pricing (`usagetype` prefixed with the region code,
+    e.g. "USE1-DNS-Queries", no `routingType` attribute) — excluded by
+    requiring the unprefixed "DNS-Queries" usagetype and routingType
+    "Standard" / routingTarget "External".
+
+    Service code: AmazonRoute53, product families: DNS Zone, DNS Query.
+    Returns count of rows stored.
+    """
+    pricing = _pricing_client(profile)
+    stored = 0
+
+    for product in _iter_products(pricing, "AmazonRoute53", [
+        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "DNS Zone"},
+    ]):
+        attrs = product.get("product", {}).get("attributes", {})
+        if attrs.get("usagetype") != "HostedZone":
+            continue
+        result = _first_tier_price(product)
+        if result is None:
+            continue
+        unit, price, desc = result
+        price_db.upsert("AmazonRoute53", region, "route53:hostedzone", unit, price, desc, db=db)
+        stored += 1
+
+    for product in _iter_products(pricing, "AmazonRoute53", [
+        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "DNS Query"},
+    ]):
+        attrs = product.get("product", {}).get("attributes", {})
+        if (
+            attrs.get("usagetype") != "DNS-Queries"
+            or attrs.get("routingType") != "Standard"
+            or attrs.get("routingTarget") != "External"
+        ):
+            continue
+        result = _first_tier_price(product)
+        if result is None:
+            continue
+        unit, price, desc = result
+        price_db.upsert("AmazonRoute53", region, "route53:queries", unit, price, desc, db=db)
+        stored += 1
+
+    return stored
+
+
+def fetch_kms(
+    region: str, profile: Optional[str] = None, db: Optional[Path] = None
+) -> int:
+    """
+    KMS customer-managed key monthly price and standard (symmetric) API
+    request price for `region`. Excludes asymmetric/GenerateDataKeyPair
+    request pricing (several times more expensive per request) by requiring
+    the exact product families used only by the standard rates — those
+    variants carry no productFamily at all, so a substring/usagetype-suffix
+    match would risk picking one of them up instead.
+    Service code: awskms, product families: Encryption Key, API Request.
+    Returns count of rows stored.
+    """
+    pricing = _pricing_client(profile)
+    filters = [{"Type": "TERM_MATCH", "Field": "regionCode", "Value": region}]
+    stored = 0
+    for product in _iter_products(pricing, "awskms", filters):
+        family = product.get("product", {}).get("productFamily", "")
+        if family == "Encryption Key":
+            key = "kms:key"
+        elif family == "API Request":
+            key = "kms:requests"
+        else:
+            continue
+        result = _ondemand_price(product)
+        if result is None:
+            continue
+        unit, price, desc = result
+        price_db.upsert("awskms", region, key, unit, price, desc, db=db)
+        stored += 1
+    return stored
+
+
+def fetch_waf(
+    region: str, profile: Optional[str] = None, db: Optional[Path] = None
+) -> int:
+    """
+    WAFv2 web ACL, rule, and baseline request prices for `region`. WAF's
+    Pricing API response puts everything under one productFamily ("Web
+    Application Firewall"), so `group` + `usagetype` do the real filtering:
+
+    - "WebACLV2" / "RuleV2" suffixes select the v2 (aws_wafv2_web_acl) fixed
+      charges, excluding the classic-WAF "WebACL"/"Rule" line items (no "V2")
+      that share the same $5/$1 prices but apply to a different resource.
+    - Request pricing is actually tiered by Web ACL Capacity Units (WCU),
+      which depends on rule complexity bucksawz can't compute from Terraform
+      config alone — "RequestV2-Tier0" (group "Request", the cheapest/base
+      tier) is used as a representative rate instead, matching the flat
+      $0.60/million AWS advertises on its pricing page. group == "Request"
+      (not "Request (Shield Protected)") also excludes the Shield-protected
+      and AMR managed-rule-group request surcharges.
+
+    Service code: awswaf, product family: Web Application Firewall.
+    Returns count of rows stored.
+    """
+    pricing = _pricing_client(profile)
+    filters = [{"Type": "TERM_MATCH", "Field": "regionCode", "Value": region}]
+    stored = 0
+    for product in _iter_products(pricing, "awswaf", filters):
+        attrs = product.get("product", {}).get("attributes", {})
+        usagetype = attrs.get("usagetype", "")
+        group = attrs.get("group", "")
+        if group == "Web ACL" and usagetype.endswith("WebACLV2"):
+            key = "waf:webacl"
+        elif group == "Rule" and usagetype.endswith("RuleV2"):
+            key = "waf:rule"
+        elif group == "Request" and usagetype.endswith("RequestV2-Tier0"):
+            key = "waf:requests"
+        else:
+            continue
+        result = _ondemand_price(product)
+        if result is None:
+            continue
+        unit, price, desc = result
+        price_db.upsert("awswaf", region, key, unit, price, desc, db=db)
+        stored += 1
+    return stored
+
+
 _FETCHERS: dict[str, object] = {
     "ECS": fetch_fargate,
     "Lambda": fetch_lambda,
@@ -580,6 +720,9 @@ _FETCHERS: dict[str, object] = {
     "CloudWatch": fetch_cloudwatch,
     "ELB": fetch_elb,
     "SecretsManager": fetch_secretsmanager,
+    "Route53": fetch_route53,
+    "KMS": fetch_kms,
+    "WAF": fetch_waf,
 }
 
 ALL_SERVICES: list[str] = list(_FETCHERS.keys())
