@@ -150,7 +150,7 @@ def prices():
 @click.option(
     "--services", "-s", default=None,
     help="Comma-separated list of services to update. Defaults to all of them: "
-         "ECS, Lambda, EC2, EBS, RDS, ElastiCache, S3, SQS, CloudWatch, ELB.",
+         "ECS, Lambda, EC2, EBS, RDS, ElastiCache, S3, SQS, CloudWatch, ELB, SecretsManager.",
 )
 @click.option(
     "--regions", "-r", default="us-east-1",

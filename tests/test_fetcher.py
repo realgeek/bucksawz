@@ -604,12 +604,35 @@ def test_fetch_elb_ignores_unknown_product_family(fake_pricing, tmp_db):
     assert fetcher.fetch_elb("us-east-1", db=tmp_db) == 0
 
 
+# ── Secrets Manager ─────────────────────────────────────────────────────────
+
+
+def test_fetch_secretsmanager_secret_and_requests(fake_pricing, tmp_db):
+    fake_pricing([
+        _product("Secret", {"usagetype": "USE1-AWSSecretsManager-Secrets"},
+                 _dim(0.40, unit="Secrets")),
+        _product("API Request", {"usagetype": "USE1-AWSSecretsManagerAPIRequest"},
+                 _dim(0.000005, unit="API Requests")),
+    ])
+    assert fetcher.fetch_secretsmanager("us-east-1", db=tmp_db) == 2
+    assert _keys("AWSSecretsManager", "us-east-1", tmp_db) == {
+        "secretsmanager:secret": pytest.approx(0.40),
+        "secretsmanager:requests": pytest.approx(0.000005),
+    }
+
+
+def test_fetch_secretsmanager_ignores_unknown_product_family(fake_pricing, tmp_db):
+    fake_pricing([_product("Other", {"usagetype": "USE1-SomethingElse"}, _dim(1.0))])
+    assert fetcher.fetch_secretsmanager("us-east-1", db=tmp_db) == 0
+
+
 # ── fetch_all ────────────────────────────────────────────────────────────────
 
 
 def test_all_services_matches_fetcher_registry():
     assert set(fetcher.ALL_SERVICES) == {
         "ECS", "Lambda", "EC2", "EBS", "RDS", "ElastiCache", "S3", "SQS", "CloudWatch", "ELB",
+        "SecretsManager",
     }
 
 

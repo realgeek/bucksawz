@@ -113,7 +113,7 @@ breakdowns appear automatically in the report — no extra flags needed.
 
 ```bash
 # Pre-fetch prices (requires pricing:GetProducts). Defaults to every supported
-# service: ECS, Lambda, EC2, EBS, RDS, ElastiCache, S3, SQS, CloudWatch, ELB.
+# service: ECS, Lambda, EC2, EBS, RDS, ElastiCache, S3, SQS, CloudWatch, ELB, SecretsManager.
 bucksawz prices update \
   --regions us-east-1,eu-west-2,ap-southeast-2 \
   --aws-profile my-profile
@@ -161,12 +161,18 @@ types priced today:
 | `aws_lambda_function` | request + GB-second unit prices (usage-based) |
 | `aws_s3_bucket` | Standard storage GB-month unit price (usage-based) |
 | `aws_sqs_queue` | request unit price, Standard or FIFO (usage-based) |
+| `aws_secretsmanager_secret` | flat $0.40/mo per secret, plus API request unit price (usage-based) |
 
 EBS volumes attached to an instance or launch template are priced as sub-resources
 of it and folded into its total; a standalone `aws_ebs_volume` prices the same way
 on its own. gp3's first 3,000 IOPS / 125 MiB/s are included in the storage price —
 only usage above that is billed separately; io1 has no free IOPS tier; io2 IOPS is
 billed across three AWS-fixed tiers.
+
+Unlike the other usage-based resources, a Secrets Manager secret's storage cost is
+always known from Terraform config alone — it's a flat per-secret rate independent
+of the secret's size or content — so `monthly_cost` is populated even though the
+API-request component stays usage-based.
 
 Usage-based rows carry a unit price but no monthly total — quantity isn't knowable
 from a Terraform config. Anything unrecognised is listed as no-price rather than
@@ -241,7 +247,8 @@ Infracost itself is also Apache 2.0. bucksawz aims to be a drop-in replacement f
 - [x] ELB/ALB/NLB pricing in the price cache
 - [x] Plan cost diffs — per-resource delta from a Terraform plan or an Infracost `diff`
 - [x] EBS pricing: storage (7 volume types), provisioned IOPS/throughput, root/attached volumes
-- [ ] Broaden `price-state` coverage further: NAT gateways, data transfer, Config, Route 53, KMS, WAF, Secrets Manager
+- [x] Secrets Manager pricing: flat per-secret rate + usage-based API requests
+- [ ] Broaden `price-state` coverage further: NAT gateways, data transfer, Config, Route 53, KMS, WAF
 - [ ] CloudWatch metrics for S3 bucket size and CloudWatch Logs volume, so those unit prices resolve to real estimates
 - [ ] Multi-region `price-state` (currently one `--region` per run; a plan spanning providers is priced against one region)
 - [ ] Multi-region enrichment (currently one CE region per `enrich` run)

@@ -539,6 +539,35 @@ def fetch_ebs(
     return stored
 
 
+def fetch_secretsmanager(
+    region: str, profile: Optional[str] = None, db: Optional[Path] = None
+) -> int:
+    """
+    Secrets Manager per-secret monthly price and per-API-request price for `region`.
+    Service code: AWSSecretsManager, product families: Secret, API Request.
+    Only two line items exist per region, no contaminant filtering needed.
+    Returns count of rows stored.
+    """
+    pricing = _pricing_client(profile)
+    filters = [{"Type": "TERM_MATCH", "Field": "regionCode", "Value": region}]
+    stored = 0
+    for product in _iter_products(pricing, "AWSSecretsManager", filters):
+        family = product.get("product", {}).get("productFamily", "")
+        if family == "Secret":
+            key = "secretsmanager:secret"
+        elif family == "API Request":
+            key = "secretsmanager:requests"
+        else:
+            continue
+        result = _ondemand_price(product)
+        if result is None:
+            continue
+        unit, price, desc = result
+        price_db.upsert("AWSSecretsManager", region, key, unit, price, desc, db=db)
+        stored += 1
+    return stored
+
+
 _FETCHERS: dict[str, object] = {
     "ECS": fetch_fargate,
     "Lambda": fetch_lambda,
@@ -550,6 +579,7 @@ _FETCHERS: dict[str, object] = {
     "SQS": fetch_sqs,
     "CloudWatch": fetch_cloudwatch,
     "ELB": fetch_elb,
+    "SecretsManager": fetch_secretsmanager,
 }
 
 ALL_SERVICES: list[str] = list(_FETCHERS.keys())

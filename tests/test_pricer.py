@@ -36,6 +36,8 @@ def tmp_db(tmp_path) -> Path:
     price_db.upsert("AmazonEC2", "us-east-1", "ebs:iops:io2:tier2", "IOPS-Mo", 0.0455, db=db)
     price_db.upsert("AmazonEC2", "us-east-1", "ebs:iops:io2:tier3", "IOPS-Mo", 0.03185, db=db)
     price_db.upsert("AmazonEC2", "us-east-1", "ebs:throughput:gp3", "MiBps-Mo", 0.04, db=db)
+    price_db.upsert("AWSSecretsManager", "us-east-1", "secretsmanager:secret", "Secrets", 0.40, db=db)
+    price_db.upsert("AWSSecretsManager", "us-east-1", "secretsmanager:requests", "API Requests", 5e-6, db=db)
     return db
 
 
@@ -271,6 +273,35 @@ def test_sqs_fifo_queue_uses_fifo_price(tmp_db):
     tf = _tf("aws_sqs_queue", {"fifo_queue": True})
     [resource] = price_resources([tf], "us-east-1", db=tmp_db)
     assert resource.cost_components[0].price == pytest.approx(0.50)
+
+
+# ── Secrets Manager ───────────────────────────────────────────────────────────
+
+
+def test_secretsmanager_secret_flat_monthly_cost(tmp_db):
+    """Unlike S3/SQS, a secret's price doesn't depend on its config or usage."""
+    tf = _tf("aws_secretsmanager_secret", {})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(0.40)
+
+
+def test_secretsmanager_secret_has_fixed_and_usage_based_components(tmp_db):
+    tf = _tf("aws_secretsmanager_secret", {})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    fixed, requests = resource.cost_components
+    assert not fixed.usage_based
+    assert fixed.monthly_cost == pytest.approx(0.40)
+    assert requests.usage_based
+    assert requests.monthly_cost is None
+    assert requests.unit == "1M requests"
+    assert requests.price == pytest.approx(5.0)
+
+
+def test_secretsmanager_secret_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_secretsmanager_secret", {})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
 
 
 # ── EBS: standalone aws_ebs_volume ───────────────────────────────────────────

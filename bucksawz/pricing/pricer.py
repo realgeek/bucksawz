@@ -572,6 +572,48 @@ def _price_sqs_queue(tf: TFResource, region: str, db=None) -> Optional[Resource]
     )
 
 
+def _price_secretsmanager_secret(tf: TFResource, region: str, db=None) -> Optional[Resource]:
+    """
+    A secret's per-month price is fixed regardless of its config, so unlike S3/SQS/
+    Lambda this resource always has a known monthly_cost. API request volume isn't,
+    so that component stays usage-based alongside it.
+    """
+    row = price_db.get_price("AWSSecretsManager", region, "secretsmanager:secret", db=db)
+    if row is None:
+        return _unpriced(tf, f"no Secrets Manager price data in {region}")
+    price = row["price_usd"]
+    fixed_comp = CostComponent(
+        name="Secret",
+        unit="months",
+        hourly_quantity=None,
+        monthly_quantity=1.0,
+        price=price,
+        hourly_cost=price / 730,
+        monthly_cost=price,
+        usage_based=False,
+    )
+    req_row = price_db.get_price("AWSSecretsManager", region, "secretsmanager:requests", db=db)
+    requests_comp = CostComponent(
+        name="API requests",
+        unit="1M requests",
+        hourly_quantity=None,
+        monthly_quantity=None,
+        price=req_row["price_usd"] * _PER_MILLION if req_row else None,
+        hourly_cost=None,
+        monthly_cost=None,
+        usage_based=True,
+    )
+    return Resource(
+        name=tf.address,
+        resource_type=tf.type,
+        tags=tf.values.get("tags") or {},
+        monthly_cost=price,
+        hourly_cost=price / 730,
+        cost_components=[fixed_comp, requests_comp],
+        sub_resources=[],
+    )
+
+
 _PRICERS = {
     "aws_instance": _price_ec2_instance,
     "aws_launch_template": _price_ec2_instance,
@@ -587,6 +629,7 @@ _PRICERS = {
     "aws_elasticache_replication_group": _price_elasticache,
     "aws_s3_bucket": _price_s3_bucket,
     "aws_sqs_queue": _price_sqs_queue,
+    "aws_secretsmanager_secret": _price_secretsmanager_secret,
 }
 
 
