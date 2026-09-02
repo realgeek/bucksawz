@@ -52,6 +52,8 @@ def tmp_db(tmp_path) -> Path:
     price_db.upsert("awswaf", "us-east-1", "waf:requests", "Request", 6e-7, db=db)
     price_db.upsert("AmazonEC2", "us-east-1", "natgateway:hourly", "Hrs", 0.045, db=db)
     price_db.upsert("AmazonEC2", "us-east-1", "natgateway:data", "GB", 0.045, db=db)
+    price_db.upsert("AWSConfig", "us-east-1", "config:item", "items", 0.003, db=db)
+    price_db.upsert("AWSConfig", "us-east-1", "config:rule:evaluation", "evaluations", 0.001, db=db)
     return db
 
 
@@ -153,6 +155,34 @@ def test_nat_gateway_falls_back_to_flat_rate_without_cached_price(empty_db):
     assert resource.monthly_cost == pytest.approx(0.045 * 730)
     variable = next(c for c in resource.cost_components if c.usage_based)
     assert variable.price is None
+
+
+def test_config_recorder_fully_usage_based(tmp_db):
+    tf = _tf("aws_config_configuration_recorder", {})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.monthly_cost is None
+    [comp] = resource.cost_components
+    assert comp.usage_based
+    assert comp.unit == "items"
+    assert comp.price == pytest.approx(0.003)
+    assert comp.monthly_cost is None
+
+
+def test_config_rule_fully_usage_based(tmp_db):
+    tf = _tf("aws_config_config_rule", {"source": {"owner": "AWS", "source_identifier": "S3_BUCKET_PUBLIC_READ_PROHIBITED"}})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.monthly_cost is None
+    [comp] = resource.cost_components
+    assert comp.usage_based
+    assert comp.unit == "evaluations"
+    assert comp.price == pytest.approx(0.001)
+
+
+def test_config_falls_back_to_documented_rate_without_cached_price(empty_db):
+    tf = _tf("aws_config_configuration_recorder", {})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    [comp] = resource.cost_components
+    assert comp.price == pytest.approx(0.003)
 
 
 def test_alb_alias_is_priced(tmp_db):

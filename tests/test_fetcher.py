@@ -787,7 +787,7 @@ def test_fetch_waf_ignores_shield_protected_and_higher_wcu_tiers(fake_pricing, t
 def test_all_services_matches_fetcher_registry():
     assert set(fetcher.ALL_SERVICES) == {
         "ECS", "Lambda", "EC2", "EBS", "RDS", "ElastiCache", "S3", "SQS", "CloudWatch", "ELB",
-        "SecretsManager", "Route53", "KMS", "WAF", "DataTransfer", "NATGateway",
+        "SecretsManager", "Route53", "KMS", "WAF", "DataTransfer", "NATGateway", "Config",
     }
 
 
@@ -887,3 +887,30 @@ def test_fetch_data_transfer_ignores_interregion(fake_pricing, tmp_db):
         _product("Data Transfer", {"transferType": "InterRegion Outbound"}, _dim(0.02, unit="GB")),
     ])
     assert fetcher.fetch_data_transfer("us-east-1", db=tmp_db) == 0
+
+
+# ── AWS Config ───────────────────────────────────────────────────────────────
+
+
+def test_fetch_config_item_and_rule_evaluation(fake_pricing, tmp_db):
+    fake_pricing([
+        _product("Management Tools", {"usagetype": "USE1-ConfigurationItemRecorded"},
+                 _dim(0.003, unit="items")),
+        _product("Management Tools", {"usagetype": "USE1-ConfigRuleEvaluations"}, [
+            _dim(0.001, unit="evaluations", begin_range="0"),
+            _dim(0.0008, unit="evaluations", begin_range="100000"),
+            _dim(0.0005, unit="evaluations", begin_range="500000"),
+        ]),
+    ])
+    assert fetcher.fetch_config("us-east-1", db=tmp_db) == 2
+    assert _keys("AWSConfig", "us-east-1", tmp_db) == {
+        "config:item": pytest.approx(0.003),
+        "config:rule:evaluation": pytest.approx(0.001),
+    }
+
+
+def test_fetch_config_ignores_unrelated_usagetype(fake_pricing, tmp_db):
+    fake_pricing([
+        _product("Management Tools", {"usagetype": "USE1-SomethingElse"}, _dim(0.5)),
+    ])
+    assert fetcher.fetch_config("us-east-1", db=tmp_db) == 0

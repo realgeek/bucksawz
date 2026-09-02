@@ -822,6 +822,54 @@ def fetch_nat_gateway(
     return stored
 
 
+def fetch_config(
+    region: str, profile: Optional[str] = None, db: Optional[Path] = None
+) -> int:
+    """
+    AWS Config configuration-item and rule-evaluation prices for `region`.
+    Both are driven entirely by usage (how often resources change, how many
+    evaluations rules run) that a single Terraform plan can't resolve —
+    see `_price_config_recorder`/`_price_config_rule` in pricer.py, which
+    store these as unit-priced, no-total components, same as S3/SQS.
+
+    Configuration items are a flat per-item rate. Rule evaluations are
+    tiered by account-wide monthly volume (first 100K / next 400K / over
+    500K); only the first tier is stored, same simplification as
+    S3/CloudWatch/Route53's first-tier pricing.
+
+    NOTE: written without live Pricing API access (no AWS credentials in
+    the dev sandbox) — the exact `usagetype` substrings below are inferred
+    from AWS's public Config pricing page, not verified against a real
+    `get_products` response. Run `bucksawz prices update --services Config`
+    and check `bucksawz prices info` against the console's advertised
+    rates before trusting this in production; adjust the substrings here
+    if they don't match.
+
+    Service code: AWSConfig. Returns count of rows stored.
+    """
+    pricing = _pricing_client(profile)
+    filters = [{"Type": "TERM_MATCH", "Field": "regionCode", "Value": region}]
+    stored = 0
+    for product in _iter_products(pricing, "AWSConfig", filters):
+        attrs = product.get("product", {}).get("attributes", {})
+        usagetype = attrs.get("usagetype", "")
+        if "ConfigurationItemRecorded" in usagetype:
+            result = _ondemand_price(product)
+            if result is None:
+                continue
+            unit, price, desc = result
+            price_db.upsert("AWSConfig", region, "config:item", unit, price, desc, db=db)
+            stored += 1
+        elif "ConfigRuleEvaluations" in usagetype:
+            result = _first_tier_price(product)
+            if result is None:
+                continue
+            unit, price, desc = result
+            price_db.upsert("AWSConfig", region, "config:rule:evaluation", unit, price, desc, db=db)
+            stored += 1
+    return stored
+
+
 _FETCHERS: dict[str, object] = {
     "ECS": fetch_fargate,
     "Lambda": fetch_lambda,
@@ -839,6 +887,7 @@ _FETCHERS: dict[str, object] = {
     "WAF": fetch_waf,
     "DataTransfer": fetch_data_transfer,
     "NATGateway": fetch_nat_gateway,
+    "Config": fetch_config,
 }
 
 ALL_SERVICES: list[str] = list(_FETCHERS.keys())

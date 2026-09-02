@@ -151,7 +151,7 @@ def prices():
     "--services", "-s", default=None,
     help="Comma-separated list of services to update. Defaults to all of them: "
          "ECS, Lambda, EC2, EBS, RDS, ElastiCache, S3, SQS, CloudWatch, ELB, "
-         "SecretsManager, Route53, KMS, WAF, DataTransfer, NATGateway.",
+         "SecretsManager, Route53, KMS, WAF, DataTransfer, NATGateway, Config.",
 )
 @click.option(
     "--regions", "-r", default="us-east-1",

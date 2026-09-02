@@ -37,6 +37,11 @@ _ELB_LCU_PRICE = 0.008
 # region: flat approximate us-east-1 on-demand rate.
 _NAT_GATEWAY_HOURLY_RATE = 0.045
 
+# Fallbacks used only when the price cache has no AWSConfig rows for the
+# region: AWS's publicly documented flat/first-tier rates.
+_CONFIG_ITEM_PRICE = 0.003
+_CONFIG_RULE_EVALUATION_PRICE = 0.001
+
 # Pricing API reports SQS and Lambda requests per single request, but the report
 # and the CloudWatch estimator both work in millions (see estimator.py).
 _PER_MILLION = 1_000_000
@@ -589,6 +594,64 @@ def _price_s3_bucket(tf: TFResource, region: str, db=None) -> Optional[Resource]
     )
 
 
+def _price_config_recorder(tf: TFResource, region: str, db=None) -> Optional[Resource]:
+    """
+    aws_config_configuration_recorder: fully usage-based, same as S3/SQS —
+    how often tracked resources change (and thus how many configuration
+    items get recorded) isn't knowable from the recorder's own config.
+    """
+    row = price_db.get_price("AWSConfig", region, "config:item", db=db)
+    price = row["price_usd"] if row else _CONFIG_ITEM_PRICE
+    comp = CostComponent(
+        name="Configuration items recorded",
+        unit="items",
+        hourly_quantity=None,
+        monthly_quantity=None,
+        price=price,
+        hourly_cost=None,
+        monthly_cost=None,
+        usage_based=True,
+    )
+    return Resource(
+        name=tf.address,
+        resource_type=tf.type,
+        tags=tf.values.get("tags") or {},
+        monthly_cost=None,
+        hourly_cost=None,
+        cost_components=[comp],
+        sub_resources=[],
+    )
+
+
+def _price_config_rule(tf: TFResource, region: str, db=None) -> Optional[Resource]:
+    """
+    aws_config_config_rule: fully usage-based, same idea as the recorder —
+    evaluation count is driven by resource change events, not by the rule's
+    config (managed vs custom doesn't change the per-evaluation rate).
+    """
+    row = price_db.get_price("AWSConfig", region, "config:rule:evaluation", db=db)
+    price = row["price_usd"] if row else _CONFIG_RULE_EVALUATION_PRICE
+    comp = CostComponent(
+        name="Rule evaluations",
+        unit="evaluations",
+        hourly_quantity=None,
+        monthly_quantity=None,
+        price=price,
+        hourly_cost=None,
+        monthly_cost=None,
+        usage_based=True,
+    )
+    return Resource(
+        name=tf.address,
+        resource_type=tf.type,
+        tags=tf.values.get("tags") or {},
+        monthly_cost=None,
+        hourly_cost=None,
+        cost_components=[comp],
+        sub_resources=[],
+    )
+
+
 def _price_sqs_queue(tf: TFResource, region: str, db=None) -> Optional[Resource]:
     queue_type = "fifo" if tf.values.get("fifo_queue") else "standard"
     row = price_db.get_price("AWSQueueService", region, f"sqs:requests:{queue_type}", db=db)
@@ -872,6 +935,8 @@ _PRICERS = {
     "aws_kms_key": _price_kms_key,
     "aws_wafv2_web_acl": _price_waf_web_acl,
     "aws_nat_gateway": _price_nat_gateway,
+    "aws_config_configuration_recorder": _price_config_recorder,
+    "aws_config_config_rule": _price_config_rule,
 }
 
 

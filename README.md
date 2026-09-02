@@ -184,6 +184,8 @@ types priced today:
 | `aws_kms_key` | flat $1/mo per customer-managed key, plus symmetric API request unit price (usage-based) |
 | `aws_wafv2_web_acl` | flat web ACL rate + $1/mo per `rule` block, plus baseline request unit price (usage-based) |
 | `aws_nat_gateway` | flat hourly rate, plus per-GB data-processed unit price (usage-based) |
+| `aws_config_configuration_recorder` | configuration-item-recorded unit price (usage-based) |
+| `aws_config_config_rule` | rule-evaluation unit price (usage-based) |
 
 EBS volumes attached to an instance or launch template are priced as sub-resources
 of it and folded into its total; a standalone `aws_ebs_volume` prices the same way
@@ -276,7 +278,7 @@ Infracost itself is also Apache 2.0. bucksawz aims to be a drop-in replacement f
 - [x] Route 53, KMS, and WAFv2 pricing: flat base rates (zone/key/ACL+rules) + usage-based request/query components
 - [x] Data transfer pricing: every internet-egress tier + flat inter-AZ rate, as an informational unit-priced resource (real quantities need a usage file or CUR actuals — not yet implemented)
 - [x] NAT gateway pricing: flat hourly rate + usage-based per-GB data-processed rate
-- [ ] Broaden `price-state` coverage further: Config
+- [x] AWS Config pricing: fully usage-based configuration-item and rule-evaluation unit prices (real totals need account usage data, same as data transfer — see below)
 - [x] `--usage-file` for data transfer: user-supplied monthly GB (Infracost-usage-file style) turned into a real estimate, split across every egress tier
 - [ ] Data transfer usage sourcing, layer 2: Cost Explorer/CUR actuals as an alternative to `--usage-file` when the user has account access
 - [ ] CloudWatch metrics for S3 bucket size and CloudWatch Logs volume, so those unit prices resolve to real estimates
