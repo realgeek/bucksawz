@@ -60,7 +60,7 @@ Two entry points, one shared back half:
 ## Notes
 
 - `DECISIONS.md` records the rationale behind major architectural choices (Python over Go, JSON schema as canonical input, self-contained HTML output, etc.) — check it before revisiting a past decision.
-- The GitHub Actions workflow (`.github/workflows/`) is the reference integration: Infracost → optional OIDC-based `enrich` → `report` → upload artifact + PR comment.
+- The GitHub Actions workflow (`.github/workflows/`) is the reference integration: Infracost → optional OIDC-based `enrich` → `report` → upload artifact + PR comment. For a `pull_request` event it also checks out the PR base ref into a `git worktree` (not a second `actions/checkout`, so the PR head checkout is left alone), runs a best-effort `infracost breakdown` there (`continue-on-error: true` — a base Terraform can't evaluate shouldn't fail the job), and feeds that into `infracost diff --compare-to` instead of a plain `infracost breakdown` when it succeeds. That gives the JSON a real `diff`/`pastBreakdown` per project (the same shape `bucksawz/schema/infracost.py`'s `Project.diff`/`past_breakdown` and `render.py`'s "Plan changes" section already expect), and the PR-comment script sums each project's `diff.totalMonthlyCost` into a one-line `Change vs. base branch: ±$X.XX/mo` shown above the per-project cost table.
 - This repo keeps AI attribution in commit messages (`Co-Authored-By:` trailers), overriding the global "never add AI attribution" instruction.
 
 <!-- MEMORY:START -->

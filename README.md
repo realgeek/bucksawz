@@ -296,8 +296,7 @@ Infracost itself is also Apache 2.0. bucksawz aims to be a drop-in replacement f
 - [x] Multi-region `price-state`: each resource prices against its own provider's region (including aliased providers passed into child modules) when the plan resolves one to a literal string; `--region` is now only the fallback for resources whose region isn't statically resolvable. Data transfer (a synthetic, non-resource cost) and Cost Explorer actuals still use a single `--region`/`--aws-profile` pair per run.
 - [ ] Multi-region enrichment (currently one CE region per `enrich` run)
 - [x] Account alias resolution: `enrich` resolves AWS Organizations account names via `list_accounts` (management/delegated-admin accounts only) and the report shows them alongside account IDs in the per-account breakdown
-- [ ] Put the plan delta in the GitHub Actions PR comment (the workflow still runs
-      `infracost breakdown`, which has no prior state to compare against)
+- [x] Put the plan delta in the GitHub Actions PR comment: the workflow now checks out the PR base ref into a worktree, runs `infracost breakdown` there, and feeds it to `infracost diff --compare-to` so the JSON carries a real per-resource delta (which `bucksawz report`'s existing "Plan changes" section already rendered) — the PR comment itself now also shows a one-line `Change vs. base branch: ±$X.XX/mo` summary alongside the artifact link. Falls back to a plain `infracost breakdown` (no delta) if the base checkout/breakdown fails.
 
 ## License
 
