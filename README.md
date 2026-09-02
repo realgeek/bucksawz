@@ -148,6 +148,23 @@ Plan changes 4 resource(s): +$42.05/mo
 The same section appears for Infracost input that carries a diff (`infracost diff
 --format json`), since bucksawz reads the standard `pastBreakdown` and `diff` fields.
 
+Some costs (data transfer today) depend on account-wide usage a single Terraform
+plan can't express. `price-state` still surfaces their unit prices, and
+`--usage-file` turns a known monthly quantity into a real estimate:
+
+```bash
+cat > usage.yml <<EOF
+data_transfer:
+  internet_egress_gb_month: 10000
+  inter_az_gb_month: 500
+EOF
+bucksawz price-state --input plan.json -o report.html --usage-file usage.yml
+```
+
+The estimate shows up in the report's "usage-based costs" table, same as a
+CloudWatch-actuals estimate from `enrich` — indicative, not a substitute for
+billed cost.
+
 Prices come from the local cache, so run `bucksawz prices update` first. Resource
 types priced today:
 
@@ -258,7 +275,8 @@ Infracost itself is also Apache 2.0. bucksawz aims to be a drop-in replacement f
 - [x] Route 53, KMS, and WAFv2 pricing: flat base rates (zone/key/ACL+rules) + usage-based request/query components
 - [x] Data transfer pricing: every internet-egress tier + flat inter-AZ rate, as an informational unit-priced resource (real quantities need a usage file or CUR actuals — not yet implemented)
 - [ ] Broaden `price-state` coverage further: NAT gateways, Config
-- [ ] Data transfer usage sourcing: `--usage-file` (user-supplied monthly GB, Infracost-usage-file style) and Cost Explorer/CUR actuals, to turn the unit-priced components above into real totals
+- [x] `--usage-file` for data transfer: user-supplied monthly GB (Infracost-usage-file style) turned into a real estimate, split across every egress tier
+- [ ] Data transfer usage sourcing, layer 2: Cost Explorer/CUR actuals as an alternative to `--usage-file` when the user has account access
 - [ ] CloudWatch metrics for S3 bucket size and CloudWatch Logs volume, so those unit prices resolve to real estimates
 - [ ] Multi-region `price-state` (currently one `--region` per run; a plan spanning providers is priced against one region)
 - [ ] Multi-region enrichment (currently one CE region per `enrich` run)

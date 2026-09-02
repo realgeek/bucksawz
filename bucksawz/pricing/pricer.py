@@ -764,6 +764,51 @@ def price_data_transfer(region: str, db=None) -> Optional[Resource]:
     )
 
 
+def estimate_data_transfer_cost(region: str, usage: dict, db=None) -> Optional[float]:
+    """
+    Turn `price_data_transfer`'s unit-priced components into a real monthly
+    total using user-supplied quantities from a usage file (see
+    usage_file.py) — the same "fill in what you can" idea as
+    estimator.estimate_resource_cost, just fed by a static number instead of
+    a live CloudWatch metric (CUR actuals would slot in the same way later).
+
+    Internet egress is split across every cumulative tier the way AWS
+    actually bills it: the first N GB at tier 0's rate, the next chunk at
+    tier 1's, and so on. Returns None if the usage file has nothing relevant
+    or no tier prices are cached for `region`.
+    """
+    from .usage_file import data_transfer_usage
+
+    egress_gb, inter_az_gb = data_transfer_usage(usage)
+    if egress_gb is None and inter_az_gb is None:
+        return None
+
+    rows = price_db.get_all("AmazonEC2", region, db=db)
+    tier_rows = sorted(
+        (r for r in rows if r["price_key"].startswith("datatransfer:out:")),
+        key=lambda r: int(r["price_key"].rsplit(":", 1)[1]),
+    )
+    regional_row = next((r for r in rows if r["price_key"] == "datatransfer:regional"), None)
+
+    total = 0.0
+    computed_any = False
+
+    if egress_gb is not None and tier_rows:
+        begins = [int(r["price_key"].rsplit(":", 1)[1]) for r in tier_rows]
+        for i, row in enumerate(tier_rows):
+            begin = begins[i]
+            end = begins[i + 1] if i + 1 < len(begins) else None
+            qty = (min(egress_gb, end) if end is not None else egress_gb) - begin
+            total += max(qty, 0.0) * row["price_usd"]
+        computed_any = True
+
+    if inter_az_gb is not None and regional_row is not None:
+        total += inter_az_gb * regional_row["price_usd"]
+        computed_any = True
+
+    return round(total, 6) if computed_any else None
+
+
 _PRICERS = {
     "aws_instance": _price_ec2_instance,
     "aws_launch_template": _price_ec2_instance,

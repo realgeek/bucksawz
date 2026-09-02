@@ -204,8 +204,13 @@ def prices_info():
 @click.option("--region", "-r", default="us-east-1", show_default=True, help="AWS region for price lookups")
 @click.option("--json-output", "json_output_path", default=None, help="Also write the priced Infracost-style JSON here")
 @click.option("--no-diff", is_flag=True, help="Report the plan's total only, skipping the cost delta.")
+@click.option(
+    "--usage-file", "usage_file_path", default=None,
+    help="YAML file with monthly usage quantities (data transfer, etc.) for costs "
+         "that can't be derived from Terraform config alone. See usage_file.py.",
+)
 @_support_plan_option
-def price_state(input_path, output_path, region, json_output_path, no_diff, support_plan):
+def price_state(input_path, output_path, region, json_output_path, no_diff, usage_file_path, support_plan):
     """Price a terraform plan/state directly against the local price cache.
 
     No Infracost API key required. Feed it `terraform show -json`:
@@ -218,7 +223,7 @@ def price_state(input_path, output_path, region, json_output_path, no_diff, supp
     import sys
     import dataclasses
     from .pricing.tf_state import is_plan, parse_prior, parse_state
-    from .pricing.pricer import build_output, price_data_transfer, price_resources
+    from .pricing.pricer import build_output, estimate_data_transfer_cost, price_data_transfer, price_resources
 
     text = sys.stdin.read() if input_path == "-" else open(input_path).read()
     data = json.loads(text)
@@ -230,16 +235,26 @@ def price_state(input_path, output_path, region, json_output_path, no_diff, supp
 
     output = build_output(priced, region, prior_resources=priced_prior)
 
+    usage = None
+    if usage_file_path:
+        from .pricing.usage_file import load_usage_file
+        usage = load_usage_file(usage_file_path)
+
+    estimates = {}
     dt_resource = price_data_transfer(region)
     if dt_resource is not None:
         output.projects[0].breakdown.resources.append(dt_resource)
+        if usage:
+            est = estimate_data_transfer_cost(region, usage)
+            if est is not None:
+                estimates[dt_resource.name] = est
 
     if json_output_path:
         with open(json_output_path, "w") as f:
             json.dump(dataclasses.asdict(output), f, indent=2, default=str)
         click.echo(f"JSON written to {json_output_path}")
 
-    render(output, output_path, support_plan=support_plan)
+    render(output, output_path, estimates=estimates or None, support_plan=support_plan)
     click.echo(f"Priced {len(priced)} resource(s) from terraform state -> {output_path}")
     diff = output.projects[0].diff
     if diff is not None:

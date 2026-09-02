@@ -3,7 +3,12 @@ import pytest
 from pathlib import Path
 from bucksawz.pricing import db as price_db
 from bucksawz.pricing.estimator import estimate_resource_cost
-from bucksawz.pricing.pricer import build_output, price_data_transfer, price_resources
+from bucksawz.pricing.pricer import (
+    build_output,
+    estimate_data_transfer_cost,
+    price_data_transfer,
+    price_resources,
+)
 from bucksawz.pricing.tf_state import TFResource
 
 
@@ -641,3 +646,79 @@ def test_data_transfer_tiers_sorted_regardless_of_insertion_order(tmp_db):
 
 def test_data_transfer_none_without_cached_price(empty_db):
     assert price_data_transfer("us-east-1", db=empty_db) is None
+
+
+_DT_TIERS = [
+    ("datatransfer:out:0", 0.09),
+    ("datatransfer:out:10240", 0.085),
+    ("datatransfer:out:51200", 0.07),
+    ("datatransfer:out:153600", 0.05),
+]
+
+
+def _seed_data_transfer_tiers(db):
+    for key, price in _DT_TIERS:
+        price_db.upsert("AmazonEC2", "us-east-1", key, "GB", price, db=db)
+    price_db.upsert("AmazonEC2", "us-east-1", "datatransfer:regional", "GB", 0.01, db=db)
+
+
+def test_estimate_data_transfer_within_first_tier(tmp_db):
+    _seed_data_transfer_tiers(tmp_db)
+    est = estimate_data_transfer_cost(
+        "us-east-1", {"data_transfer": {"internet_egress_gb_month": 5000}}, db=tmp_db,
+    )
+    assert est == pytest.approx(5000 * 0.09)
+
+
+def test_estimate_data_transfer_spans_multiple_tiers(tmp_db):
+    _seed_data_transfer_tiers(tmp_db)
+    # 15,000 GB = 10,240 GB at tier 0 + 4,760 GB at tier 1.
+    est = estimate_data_transfer_cost(
+        "us-east-1", {"data_transfer": {"internet_egress_gb_month": 15000}}, db=tmp_db,
+    )
+    assert est == pytest.approx(10240 * 0.09 + 4760 * 0.085)
+
+
+def test_estimate_data_transfer_reaches_top_uncapped_tier(tmp_db):
+    _seed_data_transfer_tiers(tmp_db)
+    total_gb = 200_000
+    est = estimate_data_transfer_cost(
+        "us-east-1", {"data_transfer": {"internet_egress_gb_month": total_gb}}, db=tmp_db,
+    )
+    expected = (
+        10240 * 0.09
+        + (51200 - 10240) * 0.085
+        + (153600 - 51200) * 0.07
+        + (total_gb - 153600) * 0.05
+    )
+    assert est == pytest.approx(expected)
+
+
+def test_estimate_data_transfer_includes_inter_az(tmp_db):
+    _seed_data_transfer_tiers(tmp_db)
+    est = estimate_data_transfer_cost(
+        "us-east-1",
+        {"data_transfer": {"internet_egress_gb_month": 1000, "inter_az_gb_month": 200}},
+        db=tmp_db,
+    )
+    assert est == pytest.approx(1000 * 0.09 + 200 * 0.01)
+
+
+def test_estimate_data_transfer_inter_az_only(tmp_db):
+    _seed_data_transfer_tiers(tmp_db)
+    est = estimate_data_transfer_cost(
+        "us-east-1", {"data_transfer": {"inter_az_gb_month": 200}}, db=tmp_db,
+    )
+    assert est == pytest.approx(200 * 0.01)
+
+
+def test_estimate_data_transfer_none_without_usage_file_data(tmp_db):
+    _seed_data_transfer_tiers(tmp_db)
+    assert estimate_data_transfer_cost("us-east-1", {}, db=tmp_db) is None
+
+
+def test_estimate_data_transfer_none_without_cached_price(empty_db):
+    est = estimate_data_transfer_cost(
+        "us-east-1", {"data_transfer": {"internet_egress_gb_month": 1000}}, db=empty_db,
+    )
+    assert est is None

@@ -504,7 +504,7 @@ tr.project-total td {
       <thead>
         <tr>
           <th>Project</th><th>Resource</th><th>Component</th><th>Unit price</th><th>Per</th>
-          {% if has_estimates %}<th title="Estimated from CloudWatch actuals">Est. monthly</th>{% endif %}
+          {% if has_estimates %}<th title="Estimated from CloudWatch actuals or a --usage-file">Est. monthly</th>{% endif %}
         </tr>
       </thead>
       <tbody>
@@ -526,7 +526,7 @@ tr.project-total td {
     </table>
     {% if has_estimates %}
     <p style="font-size:0.75rem;color:#6b7280;margin-top:0.5rem;">
-      ~ Estimated from CloudWatch actuals × unit price. Treat as indicative, not billed.
+      ~ Estimated from CloudWatch actuals or a --usage-file quantity × unit price. Treat as indicative, not billed.
     </p>
     {% endif %}
   </div>
