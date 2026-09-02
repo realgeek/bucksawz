@@ -252,6 +252,7 @@ def enrich_output(
     cache_ttl_days: int = _DEFAULT_TTL_DAYS,
     force_refresh: bool = False,
     cloudwatch: bool = True,
+    cloudwatch_regions: Optional[list[str]] = None,
 ) -> dict:
     """
     Returns a dict (JSON-serialisable) that extends the infracost output
@@ -259,6 +260,15 @@ def enrich_output(
 
     Results are cached for cache_ttl_days (default 7). Pass force_refresh=True
     to bypass the cache and re-fetch from AWS.
+
+    `region` is a single region used for the CE/Organizations API clients and
+    cache keys — Cost Explorer's cost-by-account/service totals are already
+    account-wide regardless of it (GetCostAndUsage isn't filtered by REGION
+    here), so this doesn't limit which regions' spend gets counted. CloudWatch
+    metrics, unlike CE cost data, *are* regional, so `cloudwatch_regions`
+    (defaulting to `[region]` when omitted) lets multiple regions be searched
+    per usage-based resource — see enrich_with_cloudwatch's docstring for how
+    ties/misses across regions are handled.
     """
     if force_refresh:
         from .cache import invalidate
@@ -324,7 +334,7 @@ def enrich_output(
         cw_actuals = enrich_with_cloudwatch(
             resources=all_resources,
             profile=profile,
-            region=region,
+            region=cloudwatch_regions or [region],
             lookback_days=lookback_days,
             ttl_days=cache_ttl_days,
         )

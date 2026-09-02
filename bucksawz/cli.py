@@ -74,11 +74,21 @@ def report(input_path, output_path, support_plan):
 @click.option("--output", "-o", "output_path", default="enriched.json", show_default=True)
 @click.option("--lookback-days", default=90, show_default=True, help="Days of Cost Explorer history to pull")
 @click.option("--aws-profile", default=None, help="AWS profile name")
-@click.option("--aws-region", default="us-east-1", show_default=True)
+@click.option("--aws-region", default="us-east-1", show_default=True, help="Region for Cost Explorer/Organizations API calls (cost totals are account-wide regardless).")
+@click.option(
+    "--cloudwatch-regions", default=None,
+    help="Comma-separated regions to search for CloudWatch metrics (usage-based "
+         "resources only). Defaults to --aws-region. The Infracost JSON schema "
+         "has no per-resource region, so each resource is tried against every "
+         "listed region until one returns datapoints.",
+)
 @click.option("--cache-ttl", default=7, show_default=True, help="Cache TTL in days (default 7)")
 @click.option("--force-refresh", is_flag=True, default=False, help="Bypass cache and re-fetch from AWS")
 @click.option("--no-cloudwatch", is_flag=True, default=False, help="Skip CloudWatch metric enrichment")
-def enrich(input_path, output_path, lookback_days, aws_profile, aws_region, cache_ttl, force_refresh, no_cloudwatch):
+def enrich(
+    input_path, output_path, lookback_days, aws_profile, aws_region, cloudwatch_regions,
+    cache_ttl, force_refresh, no_cloudwatch,
+):
     """Enrich infracost JSON with AWS Cost Explorer actuals.
 
     Results are cached in ~/.cache/bucksawz/ for --cache-ttl days (default 7).
@@ -87,6 +97,10 @@ def enrich(input_path, output_path, lookback_days, aws_profile, aws_region, cach
     from .aws.costexplorer import enrich_output
     import json
     output = InfracostOutput.from_file(input_path)
+    cw_regions = (
+        [r.strip() for r in cloudwatch_regions.split(",") if r.strip()]
+        if cloudwatch_regions else None
+    )
     enriched = enrich_output(
         output,
         lookback_days=lookback_days,
@@ -95,6 +109,7 @@ def enrich(input_path, output_path, lookback_days, aws_profile, aws_region, cach
         cache_ttl_days=cache_ttl,
         force_refresh=force_refresh,
         cloudwatch=not no_cloudwatch,
+        cloudwatch_regions=cw_regions,
     )
     with open(output_path, "w") as f:
         json.dump(enriched, f, indent=2)

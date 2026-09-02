@@ -150,10 +150,126 @@ def _get_metric_p50(
         return None
 
 
+def _actuals_for_resource(
+    rt: str,
+    short_name: str,
+    cw,
+    alb_dim_map: dict[str, str],
+    start: datetime,
+    end: datetime,
+    ttl_days: int,
+    profile: Optional[str],
+    region: str,
+) -> dict[str, float]:
+    """One resource's CloudWatch actuals from a single region's client, or
+    {} if the metric has no datapoints there. Split out of
+    enrich_with_cloudwatch so the multi-region loop below can retry each
+    resource type's lookup against every candidate region in turn."""
+    if rt in ("aws_lb", "aws_alb"):
+        # Try ALB first, fall back to NLB namespace
+        dim_val = alb_dim_map.get(short_name.lower(), short_name)
+        for lb_type in ("alb", "nlb"):
+            defn = _METRIC_DEFS["aws_lb"][lb_type]
+            val = _get_metric_p50(
+                cw=cw,
+                namespace=defn["namespace"],
+                metric_name=defn["metric"],
+                dimensions=[{"Name": defn["dim_key"], "Value": dim_val}],
+                start=start, end=end, stat=defn["stat"],
+                ttl_days=ttl_days, profile=profile, region=region,
+            )
+            if val is not None:
+                return {"ConsumedLCUs": val, "unit": "LCU"}
+        return {}
+
+    if rt == "aws_sqs_queue":
+        defn = _METRIC_DEFS["aws_sqs_queue"]
+        val = _get_metric_p50(
+            cw=cw,
+            namespace=defn["namespace"],
+            metric_name=defn["metric"],
+            dimensions=[{"Name": defn["dim_key"], "Value": short_name}],
+            start=start, end=end, stat=defn["stat"],
+            ttl_days=ttl_days, profile=profile, region=region,
+        )
+        if val is not None:
+            # Convert total requests → millions for pricing unit
+            return {"Requests": val / 1_000_000, "unit": "1M requests"}
+        return {}
+
+    if rt == "aws_lambda_function":
+        defn = _METRIC_DEFS["aws_lambda_function"]
+        val = _get_metric_p50(
+            cw=cw,
+            namespace=defn["namespace"],
+            metric_name=defn["metric"],
+            dimensions=[{"Name": defn["dim_key"], "Value": short_name}],
+            start=start, end=end, stat=defn["stat"],
+            ttl_days=ttl_days, profile=profile, region=region,
+        )
+        if val is not None:
+            return {"Invocations": val / 1_000_000, "unit": "1M requests"}
+        return {}
+
+    if rt in ("aws_api_gateway_rest_api", "aws_apigatewayv2_api"):
+        defn = _METRIC_DEFS.get(rt, _METRIC_DEFS["aws_api_gateway_rest_api"])
+        val = _get_metric_p50(
+            cw=cw,
+            namespace=defn["namespace"],
+            metric_name=defn["metric"],
+            dimensions=[{"Name": defn["dim_key"], "Value": short_name}],
+            start=start, end=end, stat=defn["stat"],
+            ttl_days=ttl_days, profile=profile, region=region,
+        )
+        if val is not None:
+            return {"Requests": val / 1_000_000, "unit": "1M requests"}
+        return {}
+
+    if rt == "aws_cloudwatch_log_group":
+        defn = _METRIC_DEFS["aws_cloudwatch_log_group"]
+        val = _get_metric_p50(
+            cw=cw,
+            namespace=defn["namespace"],
+            metric_name=defn["metric"],
+            dimensions=[{"Name": defn["dim_key"], "Value": short_name}],
+            start=start, end=end, stat=defn["stat"],
+            ttl_days=ttl_days, profile=profile, region=region,
+        )
+        if val is not None:
+            # Total bytes ingested over the lookback window — estimator.py
+            # normalizes to a monthly GB rate, same as Requests/Invocations.
+            return {"IngestedBytes": val, "unit": "GB"}
+        return {}
+
+    if rt == "aws_s3_bucket":
+        defn = _METRIC_DEFS["aws_s3_bucket"]
+        # BucketSizeBytes is a point-in-time gauge (daily, StandardStorage
+        # class only), not a cumulative Sum — no monthly normalization needed.
+        # Resource-name matching is the same weak heuristic used above for
+        # SQS/Lambda, and weaker here: S3 bucket names are frequently set via
+        # a `bucket` attribute unrelated to the Terraform resource address.
+        val = _get_metric_p50(
+            cw=cw,
+            namespace=defn["namespace"],
+            metric_name=defn["metric"],
+            dimensions=[
+                {"Name": defn["dim_key"], "Value": short_name},
+                {"Name": "StorageType", "Value": "StandardStorage"},
+            ],
+            start=start, end=end, stat=defn["stat"],
+            ttl_days=ttl_days, profile=profile, region=region,
+        )
+        if val is not None:
+            return {"StorageGB": val / (1024 ** 3), "unit": "GB-months"}
+        return {}
+
+    return {}
+
+
 def enrich_with_cloudwatch(
     resources: list,
     profile: Optional[str],
-    region: str,
+    region,
     lookback_days: int,
     ttl_days: int,
 ) -> dict[str, dict]:
@@ -162,25 +278,41 @@ def enrich_with_cloudwatch(
       { "aws_lb.main": {"ConsumedLCUs": 4.2, "unit": "LCU"}, ... }
 
     Only resources with usage-based components are queried.
+
+    `region` accepts a single region string or a list of regions. The
+    Infracost JSON schema this pipeline consumes carries no per-resource
+    region (unlike price-state's TFResource.region, resolved from a
+    Terraform plan's `configuration` block), so with multiple regions each
+    usage-based resource is tried against every region in turn and the
+    first one with datapoints wins — there's no way to know which region a
+    given resource actually lives in ahead of time. This means a resource
+    matched by the existing weak name heuristic in the wrong region simply
+    returns no datapoints and falls through to the next region, rather than
+    silently matching a same-named resource there; genuine identical-name
+    collisions across regions are not distinguishable and could return the
+    wrong region's data, same caveat as the existing name-matching heuristic.
     """
+    regions = [region] if isinstance(region, str) else list(region)
+
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=lookback_days)
 
-    cw = _cw_client(profile, region)
+    cw_by_region = {r: _cw_client(profile, r) for r in regions}
 
-    # Pre-fetch ALB dimension values (ARN suffixes) once
-    alb_dim_map: dict[str, str] = {}
+    # Pre-fetch ALB dimension values (ARN suffixes) once per region
+    alb_dim_maps: dict[str, dict[str, str]] = {r: {} for r in regions}
     has_lb = any(
         r.resource_type in ("aws_lb", "aws_alb") or r.name.split(".")[0] in ("aws_lb", "aws_alb")
         for r in resources
         if hasattr(r, "cost_components") and any(c.usage_based for c in r.cost_components)
     )
     if has_lb:
-        try:
-            elb = _elb_client(profile, region)
-            alb_dim_map = _list_alb_dimension_values(elb, region)
-        except Exception:
-            pass
+        for r in regions:
+            try:
+                elb = _elb_client(profile, r)
+                alb_dim_maps[r] = _list_alb_dimension_values(elb, r)
+            except Exception:
+                pass
 
     results: dict[str, dict] = {}
 
@@ -192,106 +324,15 @@ def enrich_with_cloudwatch(
 
         rt = (resource.resource_type or resource.name.split(".")[0]).lower()
         short_name = _resource_name_suffix(resource.name)
+
         actuals: dict[str, float] = {}
-
-        if rt in ("aws_lb", "aws_alb"):
-            # Try ALB first, fall back to NLB namespace
-            dim_val = alb_dim_map.get(short_name.lower(), short_name)
-            for lb_type in ("alb", "nlb"):
-                defn = _METRIC_DEFS["aws_lb"][lb_type]
-                val = _get_metric_p50(
-                    cw=cw,
-                    namespace=defn["namespace"],
-                    metric_name=defn["metric"],
-                    dimensions=[{"Name": defn["dim_key"], "Value": dim_val}],
-                    start=start, end=end, stat=defn["stat"],
-                    ttl_days=ttl_days, profile=profile, region=region,
-                )
-                if val is not None:
-                    actuals["ConsumedLCUs"] = val
-                    actuals["unit"] = "LCU"
-                    break
-
-        elif rt == "aws_sqs_queue":
-            defn = _METRIC_DEFS["aws_sqs_queue"]
-            val = _get_metric_p50(
-                cw=cw,
-                namespace=defn["namespace"],
-                metric_name=defn["metric"],
-                dimensions=[{"Name": defn["dim_key"], "Value": short_name}],
-                start=start, end=end, stat=defn["stat"],
-                ttl_days=ttl_days, profile=profile, region=region,
+        for r in regions:
+            actuals = _actuals_for_resource(
+                rt, short_name, cw_by_region[r], alb_dim_maps[r],
+                start, end, ttl_days, profile, r,
             )
-            if val is not None:
-                # Convert total requests → millions for pricing unit
-                actuals["Requests"] = val / 1_000_000
-                actuals["unit"] = "1M requests"
-
-        elif rt == "aws_lambda_function":
-            defn = _METRIC_DEFS["aws_lambda_function"]
-            val = _get_metric_p50(
-                cw=cw,
-                namespace=defn["namespace"],
-                metric_name=defn["metric"],
-                dimensions=[{"Name": defn["dim_key"], "Value": short_name}],
-                start=start, end=end, stat=defn["stat"],
-                ttl_days=ttl_days, profile=profile, region=region,
-            )
-            if val is not None:
-                actuals["Invocations"] = val / 1_000_000
-                actuals["unit"] = "1M requests"
-
-        elif rt in ("aws_api_gateway_rest_api", "aws_apigatewayv2_api"):
-            defn = _METRIC_DEFS.get(rt, _METRIC_DEFS["aws_api_gateway_rest_api"])
-            val = _get_metric_p50(
-                cw=cw,
-                namespace=defn["namespace"],
-                metric_name=defn["metric"],
-                dimensions=[{"Name": defn["dim_key"], "Value": short_name}],
-                start=start, end=end, stat=defn["stat"],
-                ttl_days=ttl_days, profile=profile, region=region,
-            )
-            if val is not None:
-                actuals["Requests"] = val / 1_000_000
-                actuals["unit"] = "1M requests"
-
-        elif rt == "aws_cloudwatch_log_group":
-            defn = _METRIC_DEFS["aws_cloudwatch_log_group"]
-            val = _get_metric_p50(
-                cw=cw,
-                namespace=defn["namespace"],
-                metric_name=defn["metric"],
-                dimensions=[{"Name": defn["dim_key"], "Value": short_name}],
-                start=start, end=end, stat=defn["stat"],
-                ttl_days=ttl_days, profile=profile, region=region,
-            )
-            if val is not None:
-                # Total bytes ingested over the lookback window — estimator.py
-                # normalizes to a monthly GB rate, same as Requests/Invocations.
-                actuals["IngestedBytes"] = val
-                actuals["unit"] = "GB"
-
-        elif rt == "aws_s3_bucket":
-            defn = _METRIC_DEFS["aws_s3_bucket"]
-            # BucketSizeBytes is a point-in-time gauge (daily, StandardStorage
-            # class only), not a cumulative Sum — no monthly normalization needed.
-            # Resource-name matching is the same weak heuristic used above for
-            # SQS/Lambda, and weaker here: S3 bucket names are frequently set via
-            # a `bucket` attribute unrelated to the Terraform resource address.
-            val = _get_metric_p50(
-                cw=cw,
-                namespace=defn["namespace"],
-                metric_name=defn["metric"],
-                dimensions=[
-                    {"Name": defn["dim_key"], "Value": short_name},
-                    {"Name": "StorageType", "Value": "StandardStorage"},
-                ],
-                start=start, end=end, stat=defn["stat"],
-                ttl_days=ttl_days, profile=profile, region=region,
-            )
-            if val is not None:
-                actuals["StorageGB"] = val / (1024 ** 3)
-                actuals["unit"] = "GB-months"
+            if actuals:
+                break
 
         if actuals:
             results[resource.name] = actuals

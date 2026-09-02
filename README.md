@@ -104,10 +104,19 @@ bucksawz enrich \
   --cache-ttl 7 \
   --force-refresh \           # bypass cache for this run
   --no-cloudwatch             # skip CloudWatch metric enrichment
+
+# Resources living in more than one region: CloudWatch metrics are regional
+# (unlike Cost Explorer's account-wide cost totals), so search every region a
+# usage-based resource might be in. Each resource is tried against each listed
+# region in order until one returns datapoints.
+bucksawz enrich \
+  --input infracost.json --output enriched.json \
+  --cloudwatch-regions us-east-1,eu-west-1,ap-southeast-2
 ```
 
 When run from an AWS Organizations management account, per-member-account cost
-breakdowns appear automatically in the report — no extra flags needed.
+breakdowns appear automatically in the report — no extra flags needed, and
+account names resolved via Organizations show alongside the IDs.
 
 ### `prices` — local AWS Pricing API cache
 
@@ -294,7 +303,7 @@ Infracost itself is also Apache 2.0. bucksawz aims to be a drop-in replacement f
 - [x] CloudWatch metrics for S3 bucket size and CloudWatch Logs volume, so those unit prices resolve to real estimates via `enrich`
 - [x] Price CloudWatch alarms and log groups directly in `price-state` (previously fetched into the price cache but never consumed by any pricer)
 - [x] Multi-region `price-state`: each resource prices against its own provider's region (including aliased providers passed into child modules) when the plan resolves one to a literal string; `--region` is now only the fallback for resources whose region isn't statically resolvable. Data transfer (a synthetic, non-resource cost) and Cost Explorer actuals still use a single `--region`/`--aws-profile` pair per run.
-- [ ] Multi-region enrichment (currently one CE region per `enrich` run)
+- [x] Multi-region enrichment: `enrich --cloudwatch-regions us-east-1,eu-west-1,...` searches every listed region for each usage-based resource's CloudWatch metrics, since Cost Explorer's cost totals are already account-wide (not filtered by region) and only CloudWatch actuals were single-region. The Infracost JSON schema carries no per-resource region, so a resource is tried against each region in order until one returns datapoints — see `enrich_with_cloudwatch`'s docstring for the name-collision caveat this implies.
 - [x] Account alias resolution: `enrich` resolves AWS Organizations account names via `list_accounts` (management/delegated-admin accounts only) and the report shows them alongside account IDs in the per-account breakdown
 - [x] Put the plan delta in the GitHub Actions PR comment: the workflow now checks out the PR base ref into a worktree, runs `infracost breakdown` there, and feeds it to `infracost diff --compare-to` so the JSON carries a real per-resource delta (which `bucksawz report`'s existing "Plan changes" section already rendered) — the PR comment itself now also shows a one-line `Change vs. base branch: ±$X.XX/mo` summary alongside the artifact link. Falls back to a plain `infracost breakdown` (no delta) if the base checkout/breakdown fails.
 

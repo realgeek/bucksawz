@@ -2,6 +2,7 @@
 data-transfer estimation: Cost Explorer supersedes --usage-file)."""
 import pytest
 from bucksawz.aws import costexplorer
+from bucksawz.schema.infracost import InfracostOutput
 
 
 class _FakePaginator:
@@ -113,3 +114,50 @@ def test_account_alias_map_from_organizations(monkeypatch):
 def test_account_alias_map_empty_when_not_management_account(monkeypatch):
     monkeypatch.setattr(costexplorer, "_organizations_client", lambda profile: _DeniedOrg())
     assert costexplorer._account_alias_map(None) == {}
+
+
+# ── Multi-region CloudWatch enrichment plumbing ─────────────────────────────
+
+
+def _install_enrich_output_stubs(monkeypatch, captured):
+    """Stub out every AWS call enrich_output makes except enrich_with_cloudwatch,
+    whose `region` argument we capture, so we can test region plumbing without
+    exercising the CE/Organizations fetch paths (covered elsewhere)."""
+    monkeypatch.setattr(costexplorer, "_ce_client", lambda profile, region: object())
+    monkeypatch.setattr(costexplorer, "_get_actuals_by_account_service", lambda *a, **k: {})
+    monkeypatch.setattr(costexplorer, "_get_forecast", lambda *a, **k: None)
+    monkeypatch.setattr(costexplorer, "_account_alias_map", lambda *a, **k: {})
+
+    import bucksawz.aws.cloudwatch as cloudwatch_mod
+
+    def _fake_enrich_with_cloudwatch(resources, profile, region, lookback_days, ttl_days):
+        captured["region"] = region
+        return {}
+
+    monkeypatch.setattr(cloudwatch_mod, "enrich_with_cloudwatch", _fake_enrich_with_cloudwatch)
+
+
+def test_enrich_output_defaults_cloudwatch_region_to_ce_region(monkeypatch):
+    captured = {}
+    _install_enrich_output_stubs(monkeypatch, captured)
+    output = InfracostOutput(
+        version="0.2", currency="USD", projects=[],
+        total_hourly_cost=None, total_monthly_cost=0.0,
+        time_generated="2026-01-01T00:00:00Z", summary={},
+    )
+    costexplorer.enrich_output(output, region="us-east-1")
+    assert captured["region"] == ["us-east-1"]
+
+
+def test_enrich_output_respects_explicit_cloudwatch_regions(monkeypatch):
+    captured = {}
+    _install_enrich_output_stubs(monkeypatch, captured)
+    output = InfracostOutput(
+        version="0.2", currency="USD", projects=[],
+        total_hourly_cost=None, total_monthly_cost=0.0,
+        time_generated="2026-01-01T00:00:00Z", summary={},
+    )
+    costexplorer.enrich_output(
+        output, region="us-east-1", cloudwatch_regions=["us-east-1", "eu-west-1"]
+    )
+    assert captured["region"] == ["us-east-1", "eu-west-1"]
