@@ -151,7 +151,7 @@ def prices():
     "--services", "-s", default=None,
     help="Comma-separated list of services to update. Defaults to all of them: "
          "ECS, Lambda, EC2, EBS, RDS, ElastiCache, S3, SQS, CloudWatch, ELB, "
-         "SecretsManager, Route53, KMS, WAF.",
+         "SecretsManager, Route53, KMS, WAF, DataTransfer.",
 )
 @click.option(
     "--regions", "-r", default="us-east-1",
@@ -218,7 +218,7 @@ def price_state(input_path, output_path, region, json_output_path, no_diff, supp
     import sys
     import dataclasses
     from .pricing.tf_state import is_plan, parse_prior, parse_state
-    from .pricing.pricer import build_output, price_resources
+    from .pricing.pricer import build_output, price_data_transfer, price_resources
 
     text = sys.stdin.read() if input_path == "-" else open(input_path).read()
     data = json.loads(text)
@@ -229,6 +229,10 @@ def price_state(input_path, output_path, region, json_output_path, no_diff, supp
         priced_prior = price_resources(parse_prior(data), region)
 
     output = build_output(priced, region, prior_resources=priced_prior)
+
+    dt_resource = price_data_transfer(region)
+    if dt_resource is not None:
+        output.projects[0].breakdown.resources.append(dt_resource)
 
     if json_output_path:
         with open(json_output_path, "w") as f:

@@ -718,6 +718,52 @@ def _price_waf_web_acl(tf: TFResource, region: str, db=None) -> Optional[Resourc
     )
 
 
+def price_data_transfer(region: str, db=None) -> Optional[Resource]:
+    """
+    Synthetic "Data Transfer" resource — not tied to any single Terraform
+    resource, so it doesn't go through `_PRICERS`/`price_resources`. Callers
+    append it to a breakdown directly (see `price-state` in cli.py), after
+    diffing, since it has no fixed cost and would otherwise show up as
+    spuriously "added" on every plan diff.
+
+    Every component is unit-priced only, with no quantity or total: internet
+    egress is billed against an account-wide cumulative tier that a single
+    Terraform plan can't resolve, and inter-AZ volume isn't in Terraform
+    config at all. Real numbers need either a usage file or Cost Explorer/CUR
+    actuals (not implemented yet) to fill in a quantity.
+    """
+    rows = price_db.get_all("AmazonEC2", region, db=db)
+    tier_rows = sorted(
+        (r for r in rows if r["price_key"].startswith("datatransfer:out:")),
+        key=lambda r: int(r["price_key"].rsplit(":", 1)[1]),
+    )
+    regional_row = next((r for r in rows if r["price_key"] == "datatransfer:regional"), None)
+    if not tier_rows and regional_row is None:
+        return None
+
+    comps = []
+    for row in tier_rows:
+        begin_gb = int(row["price_key"].rsplit(":", 1)[1])
+        name = "Internet egress, first tier" if begin_gb == 0 else f"Internet egress, above {begin_gb:,} GB/mo"
+        comps.append(CostComponent(
+            name=name, unit="GB",
+            hourly_quantity=None, monthly_quantity=None,
+            price=row["price_usd"], hourly_cost=None, monthly_cost=None, usage_based=True,
+        ))
+    if regional_row is not None:
+        comps.append(CostComponent(
+            name="Inter-AZ transfer", unit="GB",
+            hourly_quantity=None, monthly_quantity=None,
+            price=regional_row["price_usd"], hourly_cost=None, monthly_cost=None, usage_based=True,
+        ))
+
+    return Resource(
+        name=f"Data Transfer ({region})", resource_type="aws_data_transfer",
+        tags={}, monthly_cost=None, hourly_cost=None,
+        cost_components=comps, sub_resources=[],
+    )
+
+
 _PRICERS = {
     "aws_instance": _price_ec2_instance,
     "aws_launch_template": _price_ec2_instance,

@@ -256,7 +256,9 @@ Infracost itself is also Apache 2.0. bucksawz aims to be a drop-in replacement f
 - [x] EBS pricing: storage (7 volume types), provisioned IOPS/throughput, root/attached volumes
 - [x] Secrets Manager pricing: flat per-secret rate + usage-based API requests
 - [x] Route 53, KMS, and WAFv2 pricing: flat base rates (zone/key/ACL+rules) + usage-based request/query components
-- [ ] Broaden `price-state` coverage further: NAT gateways, data transfer, Config
+- [x] Data transfer pricing: every internet-egress tier + flat inter-AZ rate, as an informational unit-priced resource (real quantities need a usage file or CUR actuals — not yet implemented)
+- [ ] Broaden `price-state` coverage further: NAT gateways, Config
+- [ ] Data transfer usage sourcing: `--usage-file` (user-supplied monthly GB, Infracost-usage-file style) and Cost Explorer/CUR actuals, to turn the unit-priced components above into real totals
 - [ ] CloudWatch metrics for S3 bucket size and CloudWatch Logs volume, so those unit prices resolve to real estimates
 - [ ] Multi-region `price-state` (currently one `--region` per run; a plan spanning providers is priced against one region)
 - [ ] Multi-region enrichment (currently one CE region per `enrich` run)

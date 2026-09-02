@@ -3,7 +3,7 @@ import pytest
 from pathlib import Path
 from bucksawz.pricing import db as price_db
 from bucksawz.pricing.estimator import estimate_resource_cost
-from bucksawz.pricing.pricer import build_output, price_resources
+from bucksawz.pricing.pricer import build_output, price_data_transfer, price_resources
 from bucksawz.pricing.tf_state import TFResource
 
 
@@ -606,3 +606,38 @@ def test_build_output_totals(tmp_db):
     assert output.summary["totalNoPriceResources"] == 1
     assert len(output.projects) == 1
     assert output.projects[0].breakdown.resources == resources
+
+
+# ── Data Transfer ────────────────────────────────────────────────────────────
+
+
+def test_data_transfer_all_components_unit_priced_no_total(tmp_db):
+    price_db.upsert("AmazonEC2", "us-east-1", "datatransfer:out:0", "GB", 0.09, db=tmp_db)
+    price_db.upsert("AmazonEC2", "us-east-1", "datatransfer:out:10240", "GB", 0.085, db=tmp_db)
+    price_db.upsert("AmazonEC2", "us-east-1", "datatransfer:regional", "GB", 0.01, db=tmp_db)
+
+    resource = price_data_transfer("us-east-1", db=tmp_db)
+    assert resource is not None
+    assert resource.monthly_cost is None
+    assert resource.total_monthly_cost() == pytest.approx(0.0)
+    names = [c.name for c in resource.cost_components]
+    assert names == [
+        "Internet egress, first tier",
+        "Internet egress, above 10,240 GB/mo",
+        "Inter-AZ transfer",
+    ]
+    assert all(c.usage_based and c.monthly_cost is None for c in resource.cost_components)
+
+
+def test_data_transfer_tiers_sorted_regardless_of_insertion_order(tmp_db):
+    price_db.upsert("AmazonEC2", "us-east-1", "datatransfer:out:153600", "GB", 0.05, db=tmp_db)
+    price_db.upsert("AmazonEC2", "us-east-1", "datatransfer:out:0", "GB", 0.09, db=tmp_db)
+    price_db.upsert("AmazonEC2", "us-east-1", "datatransfer:out:51200", "GB", 0.07, db=tmp_db)
+
+    resource = price_data_transfer("us-east-1", db=tmp_db)
+    prices = [c.price for c in resource.cost_components]
+    assert prices == pytest.approx([0.09, 0.07, 0.05])
+
+
+def test_data_transfer_none_without_cached_price(empty_db):
+    assert price_data_transfer("us-east-1", db=empty_db) is None

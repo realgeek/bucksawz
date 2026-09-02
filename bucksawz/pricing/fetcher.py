@@ -342,6 +342,32 @@ def fetch_sqs(
     return stored
 
 
+def _all_tier_prices(product: dict) -> list[tuple[int, str, float, str]]:
+    """
+    Like _first_tier_price, but returns every priced tier as
+    (begin_range_gb, unit, price_usd, description), sorted ascending —
+    for pricing where every threshold matters (data transfer) rather than
+    just the cheapest/first one.
+    """
+    tiers: list[tuple[int, str, float, str]] = []
+    for offer in product.get("terms", {}).get("OnDemand", {}).values():
+        for dim in offer.get("priceDimensions", {}).values():
+            price_str = dim.get("pricePerUnit", {}).get("USD", "0")
+            try:
+                price = float(price_str)
+            except (ValueError, TypeError):
+                continue
+            if price <= 0:
+                continue
+            try:
+                begin_gb = int(dim.get("beginRange", "0"))
+            except (ValueError, TypeError):
+                begin_gb = 0
+            tiers.append((begin_gb, dim.get("unit", ""), price, dim.get("description", "")))
+    tiers.sort(key=lambda t: t[0])
+    return tiers
+
+
 def _first_tier_price(product: dict) -> Optional[tuple[str, float, str]]:
     """Like _ondemand_price, but prefers the beginRange=='0' tier for tiered pricing
     (e.g. CloudWatch custom metrics get cheaper per-metric past 10k/240k/750k/1M)."""
@@ -708,6 +734,54 @@ def fetch_waf(
     return stored
 
 
+def fetch_data_transfer(
+    region: str, profile: Optional[str] = None, db: Optional[Path] = None
+) -> int:
+    """
+    EC2 data transfer pricing for `region`: every tier of internet egress
+    ("AWS Outbound") plus the flat inter-AZ rate ("IntraRegion"). Inbound
+    internet transfer is $0/GB and is naturally excluded since
+    `_all_tier_prices`/`_ondemand_price` drop zero-priced dimensions.
+
+    Internet egress is billed against an account-wide cumulative tier (first
+    10TB, next 40TB, next 100TB, over 150TB/month) that bucksawz has no way
+    to resolve from a single Terraform plan — every tier's rate is stored
+    under its own price_key (`datatransfer:out:<begin_range_gb>`) so the
+    pricer can surface them all as unit-priced, no-total informational
+    components rather than guessing which tier applies.
+
+    Region-to-region ("InterRegion") transfer is deliberately excluded: it
+    depends on a (from, to) region pair Terraform config can't express, and
+    shares this same "Data Transfer" product family.
+
+    Service code: AmazonEC2, product family: Data Transfer.
+    Returns count of rows stored.
+    """
+    pricing = _pricing_client(profile)
+    filters = [
+        {"Type": "TERM_MATCH", "Field": "regionCode", "Value": region},
+        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "Data Transfer"},
+    ]
+    stored = 0
+    for product in _iter_products(pricing, "AmazonEC2", filters):
+        attrs = product.get("product", {}).get("attributes", {})
+        transfer_type = attrs.get("transferType", "")
+        if transfer_type == "AWS Outbound":
+            for begin_gb, unit, price, desc in _all_tier_prices(product):
+                price_db.upsert(
+                    "AmazonEC2", region, f"datatransfer:out:{begin_gb}", unit, price, desc, db=db,
+                )
+                stored += 1
+        elif transfer_type == "IntraRegion":
+            result = _ondemand_price(product)
+            if result is None:
+                continue
+            unit, price, desc = result
+            price_db.upsert("AmazonEC2", region, "datatransfer:regional", unit, price, desc, db=db)
+            stored += 1
+    return stored
+
+
 _FETCHERS: dict[str, object] = {
     "ECS": fetch_fargate,
     "Lambda": fetch_lambda,
@@ -723,6 +797,7 @@ _FETCHERS: dict[str, object] = {
     "Route53": fetch_route53,
     "KMS": fetch_kms,
     "WAF": fetch_waf,
+    "DataTransfer": fetch_data_transfer,
 }
 
 ALL_SERVICES: list[str] = list(_FETCHERS.keys())

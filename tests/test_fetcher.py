@@ -756,7 +756,7 @@ def test_fetch_waf_ignores_shield_protected_and_higher_wcu_tiers(fake_pricing, t
 def test_all_services_matches_fetcher_registry():
     assert set(fetcher.ALL_SERVICES) == {
         "ECS", "Lambda", "EC2", "EBS", "RDS", "ElastiCache", "S3", "SQS", "CloudWatch", "ELB",
-        "SecretsManager", "Route53", "KMS", "WAF",
+        "SecretsManager", "Route53", "KMS", "WAF", "DataTransfer",
     }
 
 
@@ -809,3 +809,50 @@ def test_fetch_all_defaults_to_every_service(monkeypatch, tmp_db):
     totals = fetcher.fetch_all(["us-east-1"], db=tmp_db)
     assert seen == fetcher.ALL_SERVICES
     assert set(totals) == set(fetcher.ALL_SERVICES)
+
+
+# ── Data Transfer ────────────────────────────────────────────────────────────
+
+
+def test_fetch_data_transfer_stores_all_outbound_tiers(fake_pricing, tmp_db):
+    fake_pricing([
+        _product("Data Transfer", {"transferType": "AWS Outbound"}, [
+            _dim(0.09, unit="GB", desc="first 10TB", begin_range="0"),
+            _dim(0.085, unit="GB", desc="next 40TB", begin_range="10240"),
+            _dim(0.07, unit="GB", desc="next 100TB", begin_range="51200"),
+            _dim(0.05, unit="GB", desc="over 150TB", begin_range="153600"),
+        ]),
+    ])
+    assert fetcher.fetch_data_transfer("us-east-1", db=tmp_db) == 4
+    assert _keys("AmazonEC2", "us-east-1", tmp_db) == {
+        "datatransfer:out:0": pytest.approx(0.09),
+        "datatransfer:out:10240": pytest.approx(0.085),
+        "datatransfer:out:51200": pytest.approx(0.07),
+        "datatransfer:out:153600": pytest.approx(0.05),
+    }
+
+
+def test_fetch_data_transfer_stores_flat_inter_az_rate(fake_pricing, tmp_db):
+    fake_pricing([
+        _product("Data Transfer", {"transferType": "IntraRegion"}, _dim(0.01, unit="GB")),
+    ])
+    assert fetcher.fetch_data_transfer("us-east-1", db=tmp_db) == 1
+    assert _keys("AmazonEC2", "us-east-1", tmp_db) == {
+        "datatransfer:regional": pytest.approx(0.01),
+    }
+
+
+def test_fetch_data_transfer_ignores_free_inbound(fake_pricing, tmp_db):
+    fake_pricing([
+        _product("Data Transfer", {"transferType": "AWS Inbound"}, _dim(0.0, unit="GB")),
+    ])
+    assert fetcher.fetch_data_transfer("us-east-1", db=tmp_db) == 0
+
+
+def test_fetch_data_transfer_ignores_interregion(fake_pricing, tmp_db):
+    """Region-to-region transfer shares the same product family but depends on
+    a (from, to) region pair Terraform config can't express."""
+    fake_pricing([
+        _product("Data Transfer", {"transferType": "InterRegion Outbound"}, _dim(0.02, unit="GB")),
+    ])
+    assert fetcher.fetch_data_transfer("us-east-1", db=tmp_db) == 0
