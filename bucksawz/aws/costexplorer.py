@@ -121,6 +121,87 @@ def _get_forecast(
         return None
 
 
+def fetch_data_transfer_actuals(
+    lookback_days: int,
+    profile: Optional[str],
+    region: str,
+    cache_ttl_days: int = _DEFAULT_TTL_DAYS,
+) -> Optional[dict[str, float]]:
+    """
+    Real monthly internet-egress and inter-AZ data-transfer volume from Cost
+    Explorer, as an alternative to `--usage-file` when `price-state` has AWS
+    account access — see pricer.estimate_data_transfer_cost, which accepts
+    either source through the same {internet_egress_gb_month, inter_az_gb_month}
+    shape used by usage_file.data_transfer_usage.
+
+    Filters to SERVICE "EC2 - Other" (where AWS buckets data-transfer line
+    items in Cost Explorer) and the target REGION, grouped by USAGE_TYPE,
+    Metric UsageQuantity, averaged over the lookback window. Classifies by
+    usage-type suffix the same way fetch_data_transfer (fetcher.py)
+    classifies the Pricing API's `transferType`: "-Out-Bytes" (excluding
+    "In-Bytes") is internet egress, "-Regional-Bytes" is inter-AZ.
+
+    NOTE: written without live Cost Explorer access (no AWS credentials in
+    the dev sandbox) — the usage-type suffixes are inferred from published
+    CUR column documentation, not verified against a real GetCostAndUsage
+    response. Validate against `aws ce get-cost-and-usage` output for a real
+    account with data-transfer spend before trusting the numbers, and adjust
+    the suffixes here if they don't match.
+
+    Returns None if Cost Explorer has no matching usage in the lookback
+    window (e.g. no data-transfer spend), so callers can fall back to
+    `--usage-file`.
+    """
+    ce = _ce_client(profile, region)
+    start, end = _date_range(lookback_days)
+
+    key = cache_key("ce_data_transfer_usage", profile or "default", region, start, end)
+    cached = cache_get(key, ttl_days=cache_ttl_days)
+    if cached is not None:
+        print(f"  [cache hit] data_transfer_usage ({start}→{end})")
+        return cached
+
+    print(f"  [aws] fetching Cost Explorer data-transfer usage ({start}→{end})…")
+    months = max(lookback_days / 30, 1)
+    egress_gb = 0.0
+    inter_az_gb = 0.0
+    found = False
+
+    paginator = ce.get_paginator("get_cost_and_usage")
+    for page in paginator.paginate(
+        TimePeriod={"Start": start, "End": end},
+        Granularity="MONTHLY",
+        Metrics=["UsageQuantity"],
+        Filter={
+            "And": [
+                {"Dimensions": {"Key": "SERVICE", "Values": ["EC2 - Other"]}},
+                {"Dimensions": {"Key": "REGION", "Values": [region]}},
+            ]
+        },
+        GroupBy=[{"Type": "DIMENSION", "Key": "USAGE_TYPE"}],
+    ):
+        for period in page.get("ResultsByTime", []):
+            for group in period.get("Groups", []):
+                [usage_type] = group["Keys"]
+                qty = float(group["Metrics"]["UsageQuantity"]["Amount"])
+                if usage_type.endswith("-Out-Bytes") and "In-Bytes" not in usage_type:
+                    egress_gb += qty
+                    found = True
+                elif usage_type.endswith("-Regional-Bytes"):
+                    inter_az_gb += qty
+                    found = True
+
+    if not found:
+        return None
+
+    result = {
+        "internet_egress_gb_month": egress_gb / months,
+        "inter_az_gb_month": inter_az_gb / months,
+    }
+    cache_put(key, result)
+    return result
+
+
 def enrich_output(
     output: InfracostOutput,
     lookback_days: int = 90,

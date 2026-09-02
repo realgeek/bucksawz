@@ -209,8 +209,20 @@ def prices_info():
     help="YAML file with monthly usage quantities (data transfer, etc.) for costs "
          "that can't be derived from Terraform config alone. See usage_file.py.",
 )
+@click.option(
+    "--aws-profile", default=None,
+    help="AWS profile for Cost Explorer data-transfer actuals. When usage is found, "
+         "these supersede --usage-file's data_transfer values with real account data.",
+)
+@click.option(
+    "--ce-lookback-days", default=30, show_default=True,
+    help="Days of Cost Explorer history to average for data-transfer actuals.",
+)
 @_support_plan_option
-def price_state(input_path, output_path, region, json_output_path, no_diff, usage_file_path, support_plan):
+def price_state(
+    input_path, output_path, region, json_output_path, no_diff, usage_file_path,
+    aws_profile, ce_lookback_days, support_plan,
+):
     """Price a terraform plan/state directly against the local price cache.
 
     No Infracost API key required. Feed it `terraform show -json`:
@@ -239,6 +251,14 @@ def price_state(input_path, output_path, region, json_output_path, no_diff, usag
     if usage_file_path:
         from .pricing.usage_file import load_usage_file
         usage = load_usage_file(usage_file_path)
+
+    if aws_profile:
+        from .aws.costexplorer import fetch_data_transfer_actuals
+        ce_usage = fetch_data_transfer_actuals(ce_lookback_days, aws_profile, region)
+        if ce_usage:
+            usage = dict(usage or {})
+            usage["data_transfer"] = ce_usage
+            click.echo("Using Cost Explorer actuals for data transfer (supersedes --usage-file).")
 
     estimates = {}
     dt_resource = price_data_transfer(region)
