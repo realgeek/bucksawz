@@ -604,6 +604,37 @@ def test_fetch_elb_ignores_unknown_product_family(fake_pricing, tmp_db):
     assert fetcher.fetch_elb("us-east-1", db=tmp_db) == 0
 
 
+# ── NAT Gateway ──────────────────────────────────────────────────────────────
+
+
+def test_fetch_nat_gateway_hourly_and_data(fake_pricing, tmp_db):
+    fake_pricing([
+        _product("NAT Gateway", {"usagetype": "USE1-NatGateway-Hours"}, _dim(0.045)),
+        _product("NAT Gateway", {"usagetype": "USE1-NatGateway-Bytes"},
+                 _dim(0.045, unit="GB")),
+    ])
+    assert fetcher.fetch_nat_gateway("us-east-1", db=tmp_db) == 2
+    assert set(_keys("AmazonEC2", "us-east-1", tmp_db)) == {
+        "natgateway:hourly", "natgateway:data",
+    }
+
+
+def test_fetch_nat_gateway_excludes_outposts(fake_pricing, tmp_db):
+    """Outposts NAT Gateway shares the same usagetype suffix and family."""
+    fake_pricing([
+        _product("NAT Gateway", {"usagetype": "USE1-Outposts-NatGateway-Hours"}, _dim(0.9)),
+        _product("NAT Gateway", {"usagetype": "USE1-Outposts-NatGateway-Bytes"}, _dim(0.9)),
+    ])
+    assert fetcher.fetch_nat_gateway("us-east-1", db=tmp_db) == 0
+
+
+def test_fetch_nat_gateway_ignores_unknown_usagetype(fake_pricing, tmp_db):
+    fake_pricing([
+        _product("NAT Gateway", {"usagetype": "USE1-SomethingElse"}, _dim(0.5)),
+    ])
+    assert fetcher.fetch_nat_gateway("us-east-1", db=tmp_db) == 0
+
+
 # ── Secrets Manager ─────────────────────────────────────────────────────────
 
 
@@ -756,7 +787,7 @@ def test_fetch_waf_ignores_shield_protected_and_higher_wcu_tiers(fake_pricing, t
 def test_all_services_matches_fetcher_registry():
     assert set(fetcher.ALL_SERVICES) == {
         "ECS", "Lambda", "EC2", "EBS", "RDS", "ElastiCache", "S3", "SQS", "CloudWatch", "ELB",
-        "SecretsManager", "Route53", "KMS", "WAF", "DataTransfer",
+        "SecretsManager", "Route53", "KMS", "WAF", "DataTransfer", "NATGateway",
     }
 
 

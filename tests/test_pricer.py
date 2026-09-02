@@ -50,6 +50,8 @@ def tmp_db(tmp_path) -> Path:
     price_db.upsert("awswaf", "us-east-1", "waf:webacl", "Month", 5.0, db=db)
     price_db.upsert("awswaf", "us-east-1", "waf:rule", "Month", 1.0, db=db)
     price_db.upsert("awswaf", "us-east-1", "waf:requests", "Request", 6e-7, db=db)
+    price_db.upsert("AmazonEC2", "us-east-1", "natgateway:hourly", "Hrs", 0.045, db=db)
+    price_db.upsert("AmazonEC2", "us-east-1", "natgateway:data", "GB", 0.045, db=db)
     return db
 
 
@@ -133,6 +135,24 @@ def test_classic_elb_bills_data_processed_not_lcus(tmp_db):
     variable = next(c for c in resource.cost_components if c.usage_based)
     assert variable.unit == "GB"
     assert variable.price == pytest.approx(0.008)
+
+
+def test_nat_gateway_priced_with_usage_based_data_processed(tmp_db):
+    tf = _tf("aws_nat_gateway", {})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.monthly_cost == pytest.approx(0.045 * 730)
+    variable = next(c for c in resource.cost_components if c.usage_based)
+    assert variable.unit == "GB"
+    assert variable.price == pytest.approx(0.045)
+    assert variable.monthly_cost is None
+
+
+def test_nat_gateway_falls_back_to_flat_rate_without_cached_price(empty_db):
+    tf = _tf("aws_nat_gateway", {})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.monthly_cost == pytest.approx(0.045 * 730)
+    variable = next(c for c in resource.cost_components if c.usage_based)
+    assert variable.price is None
 
 
 def test_alb_alias_is_priced(tmp_db):

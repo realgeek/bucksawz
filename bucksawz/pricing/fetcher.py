@@ -782,6 +782,46 @@ def fetch_data_transfer(
     return stored
 
 
+def fetch_nat_gateway(
+    region: str, profile: Optional[str] = None, db: Optional[Path] = None
+) -> int:
+    """
+    NAT Gateway hourly + per-GB data-processed prices for `region`. Both are
+    flat rates — no tiers, no config-dependent variants — same shape as
+    ELB's hourly+LCU pair.
+
+    Service code: AmazonEC2, product family: NAT Gateway. usagetype suffixes
+    are "NatGateway-Hours" and "NatGateway-Bytes"; Outposts carries its own
+    NAT Gateway line items under the same family with an "Outposts" usagetype
+    prefix, excluded the same way fetch_elb excludes Outposts ELB pricing.
+    Returns count of rows stored.
+    """
+    pricing = _pricing_client(profile)
+    filters = [
+        {"Type": "TERM_MATCH", "Field": "regionCode", "Value": region},
+        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "NAT Gateway"},
+    ]
+    stored = 0
+    for product in _iter_products(pricing, "AmazonEC2", filters):
+        attrs = product.get("product", {}).get("attributes", {})
+        usagetype = attrs.get("usagetype", "")
+        if "Outposts" in usagetype:
+            continue
+        if usagetype.endswith("NatGateway-Hours"):
+            key = "natgateway:hourly"
+        elif usagetype.endswith("NatGateway-Bytes"):
+            key = "natgateway:data"
+        else:
+            continue
+        result = _ondemand_price(product)
+        if result is None:
+            continue
+        unit, price, desc = result
+        price_db.upsert("AmazonEC2", region, key, unit, price, desc, db=db)
+        stored += 1
+    return stored
+
+
 _FETCHERS: dict[str, object] = {
     "ECS": fetch_fargate,
     "Lambda": fetch_lambda,
@@ -798,6 +838,7 @@ _FETCHERS: dict[str, object] = {
     "KMS": fetch_kms,
     "WAF": fetch_waf,
     "DataTransfer": fetch_data_transfer,
+    "NATGateway": fetch_nat_gateway,
 }
 
 ALL_SERVICES: list[str] = list(_FETCHERS.keys())

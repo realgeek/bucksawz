@@ -33,6 +33,10 @@ _ELB_HOURLY_RATE = {
 }
 _ELB_LCU_PRICE = 0.008
 
+# Fallback used only when the price cache has no natgateway:hourly row for the
+# region: flat approximate us-east-1 on-demand rate.
+_NAT_GATEWAY_HOURLY_RATE = 0.045
+
 # Pricing API reports SQS and Lambda requests per single request, but the report
 # and the CloudWatch estimator both work in millions (see estimator.py).
 _PER_MILLION = 1_000_000
@@ -343,6 +347,45 @@ def _price_lb(tf: TFResource, region: str, db=None) -> Optional[Resource]:
             monthly_cost=None,
             usage_based=True,
         )
+
+    return Resource(
+        name=tf.address,
+        resource_type=tf.type,
+        tags=values.get("tags") or {},
+        monthly_cost=monthly_cost,
+        hourly_cost=rate,
+        cost_components=[fixed_comp, variable_comp],
+        sub_resources=[],
+    )
+
+
+def _price_nat_gateway(tf: TFResource, region: str, db=None) -> Optional[Resource]:
+    values = tf.values
+    hourly_row = price_db.get_price("AmazonEC2", region, "natgateway:hourly", db=db)
+    rate = hourly_row["price_usd"] if hourly_row else _NAT_GATEWAY_HOURLY_RATE
+    monthly_cost = rate * 730
+    fixed_comp = CostComponent(
+        name="NAT gateway",
+        unit="hours",
+        hourly_quantity=1.0,
+        monthly_quantity=730.0,
+        price=rate,
+        hourly_cost=rate,
+        monthly_cost=monthly_cost,
+        usage_based=False,
+    )
+
+    data_row = price_db.get_price("AmazonEC2", region, "natgateway:data", db=db)
+    variable_comp = CostComponent(
+        name="Data processed",
+        unit="GB",
+        hourly_quantity=None,
+        monthly_quantity=None,
+        price=data_row["price_usd"] if data_row else None,
+        hourly_cost=None,
+        monthly_cost=None,
+        usage_based=True,
+    )
 
     return Resource(
         name=tf.address,
@@ -828,6 +871,7 @@ _PRICERS = {
     "aws_route53_zone": _price_route53_zone,
     "aws_kms_key": _price_kms_key,
     "aws_wafv2_web_acl": _price_waf_web_acl,
+    "aws_nat_gateway": _price_nat_gateway,
 }
 
 
