@@ -66,13 +66,14 @@ def empty_db(tmp_path) -> Path:
     return tmp_path / "empty_prices.db"
 
 
-def _tf(type_, values, address=None):
+def _tf(type_, values, address=None, region=None):
     return TFResource(
         address=address or f"{type_}.thing",
         type=type_,
         name="thing",
         provider_name="registry.terraform.io/hashicorp/aws",
         values=values,
+        region=region,
     )
 
 
@@ -80,6 +81,23 @@ def test_ec2_instance_priced(tmp_db):
     tf = _tf("aws_instance", {"instance_type": "t3.micro"})
     [resource] = price_resources([tf], "us-east-1", db=tmp_db)
     assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(0.0104 * 730)
+
+
+def test_resource_own_region_overrides_cli_region(tmp_db):
+    """A resource with a resolved provider region prices against that
+    region's cache rows, even when a different --region is passed."""
+    price_db.upsert(
+        "AmazonEC2", "eu-west-1", "ec2:t3.micro:linux:shared", "Hrs", 0.0119, db=tmp_db
+    )
+    tf = _tf("aws_instance", {"instance_type": "t3.micro"}, region="eu-west-1")
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.monthly_cost == pytest.approx(0.0119 * 730)
+
+
+def test_resource_without_own_region_falls_back_to_cli_region(tmp_db):
+    tf = _tf("aws_instance", {"instance_type": "t3.micro"}, region=None)
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
     assert resource.monthly_cost == pytest.approx(0.0104 * 730)
 
 

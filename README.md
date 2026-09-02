@@ -293,7 +293,7 @@ Infracost itself is also Apache 2.0. bucksawz aims to be a drop-in replacement f
 - [x] Data transfer usage sourcing, layer 3: Cost Explorer actuals (`--aws-profile`) supersede `--usage-file` when the account has matching data-transfer spend
 - [x] CloudWatch metrics for S3 bucket size and CloudWatch Logs volume, so those unit prices resolve to real estimates via `enrich`
 - [x] Price CloudWatch alarms and log groups directly in `price-state` (previously fetched into the price cache but never consumed by any pricer)
-- [ ] Multi-region `price-state` (currently one `--region` per run; a plan spanning providers is priced against one region)
+- [x] Multi-region `price-state`: each resource prices against its own provider's region (including aliased providers passed into child modules) when the plan resolves one to a literal string; `--region` is now only the fallback for resources whose region isn't statically resolvable. Data transfer (a synthetic, non-resource cost) and Cost Explorer actuals still use a single `--region`/`--aws-profile` pair per run.
 - [ ] Multi-region enrichment (currently one CE region per `enrich` run)
 - [ ] Account alias resolution (show account names alongside IDs)
 - [ ] Put the plan delta in the GitHub Actions PR comment (the workflow still runs

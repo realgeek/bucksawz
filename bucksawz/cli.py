@@ -201,7 +201,14 @@ def prices_info():
     help="Path to `terraform show -json` output, or - for stdin",
 )
 @click.option("--output", "-o", "output_path", default="report.html", show_default=True, help="Output HTML path")
-@click.option("--region", "-r", default="us-east-1", show_default=True, help="AWS region for price lookups")
+@click.option(
+    "--region", "-r", default="us-east-1", show_default=True,
+    help="Default AWS region for price lookups. A plan whose providers pin a "
+         "literal region (including per-resource via aliased providers) prices "
+         "each resource against its own region instead; this is only the "
+         "fallback for resources with no resolvable region. Fetch prices for "
+         "every region a plan touches with `prices update --regions`.",
+)
 @click.option("--json-output", "json_output_path", default=None, help="Also write the priced Infracost-style JSON here")
 @click.option("--no-diff", is_flag=True, help="Report the plan's total only, skipping the cost delta.")
 @click.option(

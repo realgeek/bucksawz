@@ -1026,13 +1026,20 @@ _PRICERS = {
 
 
 def price_resources(resources: list[TFResource], region: str, db=None) -> list[Resource]:
-    """Price every supported resource; unsupported types are skipped entirely."""
+    """Price every supported resource; unsupported types are skipped entirely.
+
+    Each resource is priced against its own provider region when the plan's
+    `configuration` resolved one (`TFResource.region`, set by tf_state.py),
+    falling back to the `region` passed in (the CLI's `--region`) otherwise —
+    e.g. for a plain state export with no `configuration` block, or a region
+    set via a variable Terraform couldn't resolve to a literal at plan time.
+    """
     priced: list[Resource] = []
     for tf in resources:
         fn = _PRICERS.get(tf.type)
         if fn is None:
             continue
-        result = fn(tf, region, db)
+        result = fn(tf, tf.region or region, db)
         if result is not None:
             priced.append(result)
     return priced
