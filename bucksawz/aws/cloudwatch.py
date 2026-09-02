@@ -63,6 +63,12 @@ _METRIC_DEFS: dict[str, dict] = {
         "stat": "Sum",
         "dim_key": "LogGroupName",
     },
+    "aws_s3_bucket": {
+        "namespace": "AWS/S3",
+        "metric": "BucketSizeBytes",
+        "stat": "Average",
+        "dim_key": "BucketName",
+    },
 }
 
 
@@ -248,6 +254,44 @@ def enrich_with_cloudwatch(
             if val is not None:
                 actuals["Requests"] = val / 1_000_000
                 actuals["unit"] = "1M requests"
+
+        elif rt == "aws_cloudwatch_log_group":
+            defn = _METRIC_DEFS["aws_cloudwatch_log_group"]
+            val = _get_metric_p50(
+                cw=cw,
+                namespace=defn["namespace"],
+                metric_name=defn["metric"],
+                dimensions=[{"Name": defn["dim_key"], "Value": short_name}],
+                start=start, end=end, stat=defn["stat"],
+                ttl_days=ttl_days, profile=profile, region=region,
+            )
+            if val is not None:
+                # Total bytes ingested over the lookback window — estimator.py
+                # normalizes to a monthly GB rate, same as Requests/Invocations.
+                actuals["IngestedBytes"] = val
+                actuals["unit"] = "GB"
+
+        elif rt == "aws_s3_bucket":
+            defn = _METRIC_DEFS["aws_s3_bucket"]
+            # BucketSizeBytes is a point-in-time gauge (daily, StandardStorage
+            # class only), not a cumulative Sum — no monthly normalization needed.
+            # Resource-name matching is the same weak heuristic used above for
+            # SQS/Lambda, and weaker here: S3 bucket names are frequently set via
+            # a `bucket` attribute unrelated to the Terraform resource address.
+            val = _get_metric_p50(
+                cw=cw,
+                namespace=defn["namespace"],
+                metric_name=defn["metric"],
+                dimensions=[
+                    {"Name": defn["dim_key"], "Value": short_name},
+                    {"Name": "StorageType", "Value": "StandardStorage"},
+                ],
+                start=start, end=end, stat=defn["stat"],
+                ttl_days=ttl_days, profile=profile, region=region,
+            )
+            if val is not None:
+                actuals["StorageGB"] = val / (1024 ** 3)
+                actuals["unit"] = "GB-months"
 
         if actuals:
             results[resource.name] = actuals

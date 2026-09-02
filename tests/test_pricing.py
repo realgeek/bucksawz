@@ -135,6 +135,39 @@ def test_estimator_lambda_invocations():
     assert est == pytest.approx(0.40, rel=1e-4)
 
 
+def test_estimator_s3_bucket_storage():
+    """S3: 500 GB average storage × $0.023/GB-mo = $11.50/mo (no month averaging)."""
+    resource = _make_resource(
+        "aws_s3_bucket.data", "aws_s3_bucket",
+        [_usage_comp("Standard storage", "GB-months", 0.023)],
+    )
+    cw = {"StorageGB": 500.0, "unit": "GB-months"}
+    est = estimate_resource_cost(resource, cw, lookback_days=90)
+    assert est == pytest.approx(500.0 * 0.023, rel=1e-4)
+
+
+def test_estimator_cloudwatch_logs_storage():
+    """CloudWatch Logs storage uses the same GB-months path as S3."""
+    resource = _make_resource(
+        "aws_cloudwatch_log_group.app", "aws_cloudwatch_log_group",
+        [_usage_comp("Data stored", "GB-months", 0.03)],
+    )
+    cw = {"StorageGB": 200.0, "unit": "GB-months"}
+    est = estimate_resource_cost(resource, cw, lookback_days=90)
+    assert est == pytest.approx(200.0 * 0.03, rel=1e-4)
+
+
+def test_estimator_cloudwatch_logs_ingestion():
+    """CloudWatch Logs: 270 GB ingested over 90 days → 90 GB/mo × $0.50/GB = $45/mo."""
+    resource = _make_resource(
+        "aws_cloudwatch_log_group.app", "aws_cloudwatch_log_group",
+        [_usage_comp("Data ingested", "GB", 0.50)],
+    )
+    cw = {"IngestedBytes": 270.0 * (1024 ** 3), "unit": "GB"}
+    est = estimate_resource_cost(resource, cw, lookback_days=90)
+    assert est == pytest.approx(90.0 * 0.50, rel=1e-4)
+
+
 def test_estimator_no_actuals_returns_none():
     resource = _make_resource(
         "aws_lb.main", "aws_lb",

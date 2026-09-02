@@ -14,6 +14,11 @@ ConsumedLCUs  — Average LCUs/hour over the lookback period.
 Requests      — Total millions of requests over the lookback period (SQS, Lambda, APIGW).
 Invocations   — Same as Requests; normalised to millions before storage.
                Monthly estimate = (total_millions / months_elapsed) × price_per_million.
+StorageGB     — Average storage size in GB (S3 BucketSizeBytes, CloudWatch Logs storage) —
+               already a point-in-time snapshot, not a period total, so no month averaging.
+               Monthly estimate = storage_gb × price_per_gb_month.
+IngestedBytes — Total bytes ingested over the lookback period (CloudWatch Logs IncomingBytes).
+               Monthly estimate = (bytes / 1024**3 / months_elapsed) × price_per_gb.
 """
 from __future__ import annotations
 from typing import Optional
@@ -73,6 +78,21 @@ def _estimate_component(
         if req_millions is not None:
             monthly_millions = req_millions / months
             return monthly_millions * price
+
+    # ── Storage: S3 bucket size / CloudWatch Logs storage ─────────────────────
+    # unit is "GB-months"; already an average snapshot, not a period total.
+    if "gb-month" in unit:
+        storage_gb = actuals.get("StorageGB")
+        if storage_gb is not None:
+            return storage_gb * price
+
+    # ── Ingestion: CloudWatch Logs "Data ingested" ─────────────────────────────
+    # unit is "GB" (not "GB-months"); a period total that needs monthly averaging.
+    if unit == "gb" or "ingest" in name:
+        ingested_bytes = actuals.get("IngestedBytes")
+        if ingested_bytes is not None:
+            monthly_gb = (ingested_bytes / (1024 ** 3)) / months
+            return monthly_gb * price
 
     return None
 

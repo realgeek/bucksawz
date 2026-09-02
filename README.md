@@ -165,6 +165,14 @@ The estimate shows up in the report's "usage-based costs" table, same as a
 CloudWatch-actuals estimate from `enrich` — indicative, not a substitute for
 billed cost.
 
+If you have AWS account access, `--aws-profile` pulls real data-transfer volume
+from Cost Explorer instead of a static number, superseding `--usage-file`'s
+`data_transfer` values when it finds matching usage:
+
+```bash
+bucksawz price-state --input plan.json -o report.html --aws-profile prod --ce-lookback-days 30
+```
+
 Prices come from the local cache, so run `bucksawz prices update` first. Resource
 types priced today:
 
@@ -186,6 +194,8 @@ types priced today:
 | `aws_nat_gateway` | flat hourly rate, plus per-GB data-processed unit price (usage-based) |
 | `aws_config_configuration_recorder` | configuration-item-recorded unit price (usage-based) |
 | `aws_config_config_rule` | rule-evaluation unit price (usage-based) |
+| `aws_cloudwatch_metric_alarm` | flat $0.10/mo per alarm |
+| `aws_cloudwatch_log_group` | data-ingested + data-stored unit prices (both usage-based) |
 
 EBS volumes attached to an instance or launch template are priced as sub-resources
 of it and folded into its total; a standalone `aws_ebs_volume` prices the same way
@@ -280,8 +290,9 @@ Infracost itself is also Apache 2.0. bucksawz aims to be a drop-in replacement f
 - [x] NAT gateway pricing: flat hourly rate + usage-based per-GB data-processed rate
 - [x] AWS Config pricing: fully usage-based configuration-item and rule-evaluation unit prices (real totals need account usage data, same as data transfer — see below)
 - [x] `--usage-file` for data transfer: user-supplied monthly GB (Infracost-usage-file style) turned into a real estimate, split across every egress tier
-- [ ] Data transfer usage sourcing, layer 2: Cost Explorer/CUR actuals as an alternative to `--usage-file` when the user has account access
-- [ ] CloudWatch metrics for S3 bucket size and CloudWatch Logs volume, so those unit prices resolve to real estimates
+- [x] Data transfer usage sourcing, layer 3: Cost Explorer actuals (`--aws-profile`) supersede `--usage-file` when the account has matching data-transfer spend
+- [x] CloudWatch metrics for S3 bucket size and CloudWatch Logs volume, so those unit prices resolve to real estimates via `enrich`
+- [x] Price CloudWatch alarms and log groups directly in `price-state` (previously fetched into the price cache but never consumed by any pricer)
 - [ ] Multi-region `price-state` (currently one `--region` per run; a plan spanning providers is priced against one region)
 - [ ] Multi-region enrichment (currently one CE region per `enrich` run)
 - [ ] Account alias resolution (show account names alongside IDs)

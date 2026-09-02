@@ -54,6 +54,9 @@ def tmp_db(tmp_path) -> Path:
     price_db.upsert("AmazonEC2", "us-east-1", "natgateway:data", "GB", 0.045, db=db)
     price_db.upsert("AWSConfig", "us-east-1", "config:item", "items", 0.003, db=db)
     price_db.upsert("AWSConfig", "us-east-1", "config:rule:evaluation", "evaluations", 0.001, db=db)
+    price_db.upsert("AmazonCloudWatch", "us-east-1", "cloudwatch:alarm", "Alarms", 0.10, db=db)
+    price_db.upsert("AmazonCloudWatch", "us-east-1", "cloudwatch:logs:ingestion", "GB", 0.50, db=db)
+    price_db.upsert("AmazonCloudWatch", "us-east-1", "cloudwatch:logs:storage", "GB-Mo", 0.03, db=db)
     return db
 
 
@@ -183,6 +186,38 @@ def test_config_falls_back_to_documented_rate_without_cached_price(empty_db):
     [resource] = price_resources([tf], "us-east-1", db=empty_db)
     [comp] = resource.cost_components
     assert comp.price == pytest.approx(0.003)
+
+
+def test_cloudwatch_alarm_flat_monthly_cost(tmp_db):
+    tf = _tf("aws_cloudwatch_metric_alarm", {})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.monthly_cost == pytest.approx(0.10)
+    [comp] = resource.cost_components
+    assert not comp.usage_based
+    assert comp.monthly_cost == pytest.approx(0.10)
+
+
+def test_cloudwatch_alarm_falls_back_without_cached_price(empty_db):
+    tf = _tf("aws_cloudwatch_metric_alarm", {})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.monthly_cost == pytest.approx(0.10)
+
+
+def test_cloudwatch_log_group_both_components_usage_based(tmp_db):
+    tf = _tf("aws_cloudwatch_log_group", {})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.monthly_cost is None
+    names = {c.name: c for c in resource.cost_components}
+    assert set(names) == {"Data ingested", "Data stored"}
+    assert names["Data ingested"].price == pytest.approx(0.50)
+    assert names["Data stored"].price == pytest.approx(0.03)
+    assert all(c.monthly_cost is None for c in resource.cost_components)
+
+
+def test_cloudwatch_log_group_unpriced_without_cached_data(empty_db):
+    tf = _tf("aws_cloudwatch_log_group", {})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
 
 
 def test_alb_alias_is_priced(tmp_db):

@@ -42,6 +42,12 @@ _NAT_GATEWAY_HOURLY_RATE = 0.045
 _CONFIG_ITEM_PRICE = 0.003
 _CONFIG_RULE_EVALUATION_PRICE = 0.001
 
+# Fallback used only when the price cache has no cloudwatch:alarm row for the
+# region: flat approximate us-east-1 on-demand rate ($0.10/alarm/mo standard
+# resolution; high-resolution alarms cost more but aren't distinguishable
+# from Terraform's `aws_cloudwatch_metric_alarm` config alone).
+_CLOUDWATCH_ALARM_PRICE = 0.10
+
 # Pricing API reports SQS and Lambda requests per single request, but the report
 # and the CloudWatch estimator both work in millions (see estimator.py).
 _PER_MILLION = 1_000_000
@@ -652,6 +658,83 @@ def _price_config_rule(tf: TFResource, region: str, db=None) -> Optional[Resourc
     )
 
 
+def _price_cloudwatch_alarm(tf: TFResource, region: str, db=None) -> Optional[Resource]:
+    """
+    A metric alarm's per-month price is fixed regardless of its config
+    (which metric it watches, its threshold, etc. don't change the rate),
+    so unlike CloudWatch Logs this always has a known monthly_cost —
+    same shape as Secrets Manager's flat per-secret rate.
+    """
+    row = price_db.get_price("AmazonCloudWatch", region, "cloudwatch:alarm", db=db)
+    price = row["price_usd"] if row else _CLOUDWATCH_ALARM_PRICE
+    comp = CostComponent(
+        name="Alarm",
+        unit="months",
+        hourly_quantity=None,
+        monthly_quantity=1.0,
+        price=price,
+        hourly_cost=price / 730,
+        monthly_cost=price,
+        usage_based=False,
+    )
+    return Resource(
+        name=tf.address,
+        resource_type=tf.type,
+        tags=tf.values.get("tags") or {},
+        monthly_cost=price,
+        hourly_cost=price / 730,
+        cost_components=[comp],
+        sub_resources=[],
+    )
+
+
+def _price_cloudwatch_log_group(tf: TFResource, region: str, db=None) -> Optional[Resource]:
+    """
+    aws_cloudwatch_log_group: fully usage-based, same as S3/SQS — a log
+    group's ingestion volume and retained size aren't knowable from its
+    config (log volume is driven by what the application writes, and
+    `retention_in_days` bounds *how long* stored bytes are billed, not
+    *how many* bytes there are). Two independent usage-based components,
+    same split AWS bills: bytes ingested and bytes stored.
+    """
+    components = []
+    ingestion_row = price_db.get_price("AmazonCloudWatch", region, "cloudwatch:logs:ingestion", db=db)
+    if ingestion_row is not None:
+        components.append(CostComponent(
+            name="Data ingested",
+            unit="GB",
+            hourly_quantity=None,
+            monthly_quantity=None,
+            price=ingestion_row["price_usd"],
+            hourly_cost=None,
+            monthly_cost=None,
+            usage_based=True,
+        ))
+    storage_row = price_db.get_price("AmazonCloudWatch", region, "cloudwatch:logs:storage", db=db)
+    if storage_row is not None:
+        components.append(CostComponent(
+            name="Data stored",
+            unit="GB-months",
+            hourly_quantity=None,
+            monthly_quantity=None,
+            price=storage_row["price_usd"],
+            hourly_cost=None,
+            monthly_cost=None,
+            usage_based=True,
+        ))
+    if not components:
+        return _unpriced(tf, f"no CloudWatch Logs price data in {region}")
+    return Resource(
+        name=tf.address,
+        resource_type=tf.type,
+        tags=tf.values.get("tags") or {},
+        monthly_cost=None,
+        hourly_cost=None,
+        cost_components=components,
+        sub_resources=[],
+    )
+
+
 def _price_sqs_queue(tf: TFResource, region: str, db=None) -> Optional[Resource]:
     queue_type = "fifo" if tf.values.get("fifo_queue") else "standard"
     row = price_db.get_price("AWSQueueService", region, f"sqs:requests:{queue_type}", db=db)
@@ -937,6 +1020,8 @@ _PRICERS = {
     "aws_nat_gateway": _price_nat_gateway,
     "aws_config_configuration_recorder": _price_config_recorder,
     "aws_config_config_rule": _price_config_rule,
+    "aws_cloudwatch_metric_alarm": _price_cloudwatch_alarm,
+    "aws_cloudwatch_log_group": _price_cloudwatch_log_group,
 }
 
 
