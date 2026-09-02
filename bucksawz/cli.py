@@ -5,12 +5,16 @@ from .schema.infracost import InfracostOutput
 from .schema.html_parser import parse_html
 
 
-def _load_enrichment(path: str) -> tuple[dict[str, float] | None, dict[str, float] | None]:
+def _load_enrichment(
+    path: str,
+) -> tuple[dict[str, float] | None, dict[str, float] | None, dict[str, str] | None]:
     """
-    Extract estimates and account breakdown from an enriched JSON file.
-    Returns (estimates, account_breakdown) — either may be None if absent.
+    Extract estimates, account breakdown, and account aliases from an enriched JSON file.
+    Returns (estimates, account_breakdown, account_aliases) — any may be None if absent.
     estimates: {resource_name: estimated_monthly_cost}
     account_breakdown: {account_id: monthly_average_cost}
+    account_aliases: {account_id: account_name}, from AWS Organizations (management/
+    delegated-admin accounts only — empty for a single-account or member-account profile)
     """
     try:
         with open(path) as f:
@@ -23,9 +27,10 @@ def _load_enrichment(path: str) -> tuple[dict[str, float] | None, dict[str, floa
                     estimates[r["name"]] = float(est)
         hist = data.get("historical", {})
         account_breakdown: dict[str, float] = hist.get("monthlyAverageByAccount", {})
-        return estimates or None, account_breakdown or None
+        account_aliases: dict[str, str] = hist.get("accountAliases", {})
+        return estimates or None, account_breakdown or None, account_aliases or None
     except Exception:
-        return None, None
+        return None, None, None
 
 
 @click.group()
@@ -54,11 +59,12 @@ def report(input_path, output_path, support_plan):
     estimates from CloudWatch actuals are automatically shown in the report.
     """
     output = InfracostOutput.from_file(input_path)
-    estimates, account_breakdown = _load_enrichment(input_path)
+    estimates, account_breakdown, account_aliases = _load_enrichment(input_path)
     render(
         output, output_path,
         estimates=estimates,
         account_breakdown=account_breakdown,
+        account_aliases=account_aliases,
         support_plan=support_plan,
     )
 

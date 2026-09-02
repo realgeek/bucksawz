@@ -71,3 +71,45 @@ def test_fetch_data_transfer_actuals_averages_over_lookback_months(monkeypatch):
     ])
     result = costexplorer.fetch_data_transfer_actuals(60, None, "us-east-1")
     assert result["internet_egress_gb_month"] == pytest.approx(3000.0)
+
+
+# ── Account alias resolution ─────────────────────────────────────────────────
+
+
+class _FakeOrgPaginator:
+    def __init__(self, accounts):
+        self._accounts = accounts
+
+    def paginate(self):
+        yield {"Accounts": self._accounts}
+
+
+class _FakeOrg:
+    def __init__(self, accounts):
+        self._accounts = accounts
+
+    def get_paginator(self, name):
+        assert name == "list_accounts"
+        return _FakeOrgPaginator(self._accounts)
+
+
+class _DeniedOrg:
+    def get_paginator(self, name):
+        raise Exception("AccessDeniedException: not the management account")
+
+
+def test_account_alias_map_from_organizations(monkeypatch):
+    monkeypatch.setattr(
+        costexplorer, "_organizations_client",
+        lambda profile: _FakeOrg([
+            {"Id": "111111111111", "Name": "prod"},
+            {"Id": "222222222222", "Name": "staging"},
+        ]),
+    )
+    result = costexplorer._account_alias_map(None)
+    assert result == {"111111111111": "prod", "222222222222": "staging"}
+
+
+def test_account_alias_map_empty_when_not_management_account(monkeypatch):
+    monkeypatch.setattr(costexplorer, "_organizations_client", lambda profile: _DeniedOrg())
+    assert costexplorer._account_alias_map(None) == {}

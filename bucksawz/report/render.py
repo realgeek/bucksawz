@@ -210,6 +210,7 @@ def render(
     dest: str,
     estimates: Optional[dict[str, float]] = None,
     account_breakdown: Optional[dict[str, float]] = None,
+    account_aliases: Optional[dict[str, str]] = None,
     support_plan: Optional[str] = None,
 ) -> None:
     env = Environment(
@@ -297,6 +298,7 @@ def render(
         fmt_delta=lambda v: _fmt_delta(v, output.currency),
         account_breakdown=sorted_accounts,
         account_breakdown_json=json.dumps(sorted_accounts),
+        account_aliases=account_aliases or {},
         project_costs_json=json.dumps({
             p["name"]: p["monthly_cost"] for p in projects_data
         }),

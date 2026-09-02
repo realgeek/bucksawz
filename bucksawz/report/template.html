@@ -444,7 +444,7 @@ tr.project-total td {
     <table>
       <thead>
         <tr>
-          <th>Account ID</th>
+          <th>Account</th>
           <th style="text-align:right">Monthly average</th>
           <th style="text-align:right">Share</th>
         </tr>
@@ -453,7 +453,14 @@ tr.project-total td {
         {% set acct_total = account_breakdown.values() | sum %}
         {% for account_id, cost in account_breakdown.items() %}
         <tr>
-          <td style="font-family:monospace">{{ account_id }}</td>
+          <td>
+            {% if account_aliases.get(account_id) %}
+            {{ account_aliases[account_id] }}
+            <span style="font-family:monospace;color:#6b7280;font-size:0.8em;">({{ account_id }})</span>
+            {% else %}
+            <span style="font-family:monospace">{{ account_id }}</span>
+            {% endif %}
+          </td>
           <td class="cost">{{ cost | fmt_cost }}</td>
           <td style="text-align:right;color:#6b7280;">
             {{ "%.1f" | format(cost / acct_total * 100 if acct_total > 0 else 0) }}%

@@ -22,6 +22,13 @@ def _ce_client(profile: Optional[str], region: str):
     return session.client("ce")
 
 
+def _organizations_client(profile: Optional[str]):
+    # AWS Organizations is a global service reachable only from us-east-1,
+    # regardless of the --aws-region the rest of enrich uses.
+    session = boto3.Session(profile_name=profile, region_name="us-east-1")
+    return session.client("organizations")
+
+
 def _date_range(lookback_days: int) -> tuple[str, str]:
     end = date.today()
     start = end - timedelta(days=lookback_days)
@@ -87,6 +94,41 @@ def _aggregate_by_service(by_account: dict[str, dict[str, float]]) -> dict[str, 
 def _account_totals(by_account: dict[str, dict[str, float]]) -> dict[str, float]:
     """Collapse the account×service matrix to a total per account."""
     return {acct: sum(svcs.values()) for acct, svcs in by_account.items()}
+
+
+def _account_alias_map(
+    profile: Optional[str], cache_ttl_days: int = _DEFAULT_TTL_DAYS
+) -> dict[str, str]:
+    """
+    {account_id: account_name} via AWS Organizations `list_accounts`.
+
+    Only the management account (or a delegated administrator) can call this;
+    a member-account profile gets AccessDeniedException / AWSOrganizationsNotInUseException,
+    which is expected and not an error worth surfacing — just means no aliases,
+    same as a single-account (non-Organizations) setup. Account names change
+    rarely, so this reuses the same cache TTL as the rest of enrich rather
+    than needing its own knob.
+    """
+    key = cache_key("org_account_aliases", profile or "default")
+    cached = cache_get(key, ttl_days=cache_ttl_days)
+    if cached is not None:
+        return cached
+
+    aliases: dict[str, str] = {}
+    try:
+        org = _organizations_client(profile)
+        paginator = org.get_paginator("list_accounts")
+        for page in paginator.paginate():
+            for acct in page.get("Accounts", []):
+                account_id = acct.get("Id")
+                name = acct.get("Name")
+                if account_id and name:
+                    aliases[account_id] = name
+    except Exception:
+        return {}
+
+    cache_put(key, aliases)
+    return aliases
 
 
 def _get_forecast(
@@ -226,6 +268,7 @@ def enrich_output(
         invalidate(cache_key("ce_forecast", profile or "default", region,
                              today.strftime("%Y-%m-%d"),
                              (today + timedelta(days=30)).strftime("%Y-%m-%d")))
+        invalidate(cache_key("org_account_aliases", profile or "default"))
 
     ce = _ce_client(profile, region)
     start, end = _date_range(lookback_days)
@@ -237,6 +280,7 @@ def enrich_output(
     actuals_by_account = _account_totals(by_account_service)
 
     forecast = _get_forecast(ce, profile, region, cache_ttl_days)
+    account_aliases = _account_alias_map(profile, cache_ttl_days)
 
     months = max(lookback_days / 30, 1)
     monthly_actuals = {k: v / months for k, v in actuals_by_service.items()}
@@ -260,6 +304,7 @@ def enrich_output(
             "actualsByAccount": actuals_by_account,
             "monthlyAverageByAccount": monthly_by_account,
             "actualsByAccountService": by_account_service,
+            "accountAliases": account_aliases,
             "forecastNextMonth": forecast,
             "cacheTtlDays": cache_ttl_days,
         },

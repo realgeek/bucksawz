@@ -153,3 +153,18 @@ def test_html_estimates_with_accounts(output, tmp_path):
     assert "~$24.53" in html
     assert "111111111111" in html
     assert "222222222222" in html
+
+
+def test_html_account_alias_shown_next_to_id(output, tmp_path):
+    """When Organizations resolved an account name, show it alongside the ID."""
+    dest = str(tmp_path / "acct_alias.html")
+    render(
+        output, dest,
+        account_breakdown={"123456789012": 120.00, "234567890123": 30.57},
+        account_aliases={"123456789012": "prod"},
+    )
+    html = (tmp_path / "acct_alias.html").read_text()
+    assert "prod" in html
+    assert "123456789012" in html
+    # No alias resolved for the second account — falls back to the bare ID.
+    assert "234567890123" in html
