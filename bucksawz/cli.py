@@ -172,7 +172,12 @@ def prices():
     "--services", "-s", default=None,
     help="Comma-separated list of services to update. Defaults to all of them: "
          "ECS, Lambda, EC2, EBS, RDS, ElastiCache, S3, SQS, CloudWatch, ELB, "
-         "SecretsManager, Route53, KMS, WAF, DataTransfer, NATGateway, Config.",
+         "SecretsManager, Route53, KMS, WAF, DataTransfer, NATGateway, Config, "
+         "EKS, DynamoDB, VPCEndpoint, SNS, EFS, ECR, APIGateway, CloudFront, Kinesis, "
+         "StepFunctions, EventBridge, TransitGateway, S3Files, OpenSearch, Redshift, Backup, MSK, EIP, "
+        "CloudTrail, GuardDuty, DocDB, FSxWindows, ACMPCA, Athena, FSxLustre, Neptune, "
+        "GlobalAccelerator, MQ, VPN, DirectConnect, AppSync, Cognito, Glue, "
+        "SageMaker, CloudHSM, Macie, Inspector.",
 )
 @click.option(
     "--regions", "-r", default="us-east-1",
@@ -259,19 +264,54 @@ def price_state(
 
     Given a plan, the report also shows the monthly cost delta the plan would
     cause. A plain state export has nothing to compare against, so it doesn't.
+
+    Also accepts raw (non-show-json) state exports, autodetected: a single
+    `terraform.tfstate`-shaped file, a dict of `{stack_path: <raw tfstate>}`
+    (e.g. combined from multiple `terraform state pull`s), or a flat list of
+    raw-state resource blocks each tagged with a `_stack` key. Each stack
+    becomes its own project in one combined report. There's no plan to diff
+    against and no data-transfer/Cost Explorer enrichment in this mode.
     """
     import sys
     import dataclasses
-    from .pricing.tf_state import is_plan, parse_prior, parse_state
-    from .pricing.pricer import build_output, estimate_data_transfer_cost, price_data_transfer, price_resources
+    from .pricing.tf_state import (
+        detect_format, is_plan, parse_prior, parse_raw_flat, parse_raw_multi_stack,
+        parse_raw_state, parse_state,
+    )
+    from .pricing.pricer import (
+        build_multi_project_output, build_output, estimate_data_transfer_cost,
+        price_data_transfer, price_resources,
+    )
 
     text = sys.stdin.read() if input_path == "-" else open(input_path).read()
     data = json.loads(text)
-    priced = price_resources(parse_state(data), region)
+    fmt = detect_format(data)
 
-    priced_prior = None
-    if is_plan(data) and not no_diff:
-        priced_prior = price_resources(parse_prior(data), region)
+    if fmt in ("raw_multi_stack", "raw_flat"):
+        by_stack = parse_raw_multi_stack(data) if fmt == "raw_multi_stack" else parse_raw_flat(data)
+        priced_by_stack = {stack: price_resources(tfs, region) for stack, tfs in by_stack.items()}
+        output = build_multi_project_output(priced_by_stack)
+        total_priced = sum(len(rs) for rs in priced_by_stack.values())
+
+        if json_output_path:
+            with open(json_output_path, "w") as f:
+                json.dump(dataclasses.asdict(output), f, indent=2, default=str)
+            click.echo(f"JSON written to {json_output_path}")
+
+        render(output, output_path, support_plan=support_plan)
+        click.echo(
+            f"Priced {total_priced} resource(s) across {len(priced_by_stack)} stack(s) -> {output_path}"
+        )
+        return
+
+    if fmt == "raw_state":
+        priced = price_resources(parse_raw_state(data), region)
+        priced_prior = None
+    else:
+        priced = price_resources(parse_state(data), region)
+        priced_prior = None
+        if is_plan(data) and not no_diff:
+            priced_prior = price_resources(parse_prior(data), region)
 
     output = build_output(priced, region, prior_resources=priced_prior)
 

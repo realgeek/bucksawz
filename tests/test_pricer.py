@@ -57,6 +57,79 @@ def tmp_db(tmp_path) -> Path:
     price_db.upsert("AmazonCloudWatch", "us-east-1", "cloudwatch:alarm", "Alarms", 0.10, db=db)
     price_db.upsert("AmazonCloudWatch", "us-east-1", "cloudwatch:logs:ingestion", "GB", 0.50, db=db)
     price_db.upsert("AmazonCloudWatch", "us-east-1", "cloudwatch:logs:storage", "GB-Mo", 0.03, db=db)
+    price_db.upsert("AmazonEKS", "us-east-1", "eks:cluster", "Hrs", 0.10, db=db)
+    price_db.upsert("AmazonDynamoDB", "us-east-1", "dynamodb:storage", "GB-Mo", 0.25, db=db)
+    price_db.upsert("AmazonDynamoDB", "us-east-1", "dynamodb:provisioned:read", "RCU-Hrs", 0.00013, db=db)
+    price_db.upsert("AmazonDynamoDB", "us-east-1", "dynamodb:provisioned:write", "WCU-Hrs", 0.00065, db=db)
+    price_db.upsert("AmazonDynamoDB", "us-east-1", "dynamodb:ondemand:read", "Requests", 1.25e-7, db=db)
+    price_db.upsert("AmazonDynamoDB", "us-east-1", "dynamodb:ondemand:write", "Requests", 6.25e-7, db=db)
+    price_db.upsert("AmazonVPC", "us-east-1", "vpcendpoint:hourly", "Hrs", 0.01, db=db)
+    price_db.upsert("AmazonVPC", "us-east-1", "vpcendpoint:data", "GB", 0.01, db=db)
+    price_db.upsert("AmazonSNS", "us-east-1", "sns:requests", "Requests", 5e-7, db=db)
+    price_db.upsert("AmazonEFS", "us-east-1", "efs:storage:standard", "GB-Mo", 0.30, db=db)
+    price_db.upsert("AmazonECR", "us-east-1", "ecr:storage", "GB-Mo", 0.10, db=db)
+    price_db.upsert("AmazonApiGateway", "us-east-1", "apigateway:rest:requests", "Requests", 3.5e-6, db=db)
+    price_db.upsert("AmazonApiGateway", "us-east-1", "apigateway:http:requests", "Requests", 1.0e-6, db=db)
+    price_db.upsert("AmazonCloudFront", "us-east-1", "cloudfront:data:out", "GB", 0.085, db=db)
+    price_db.upsert("AmazonCloudFront", "us-east-1", "cloudfront:requests:https", "Requests", 1.0e-5, db=db)
+    price_db.upsert("AmazonKinesis", "us-east-1", "kinesis:shard:hour", "Hrs", 0.015, db=db)
+    price_db.upsert("AmazonKinesis", "us-east-1", "kinesis:payload:units", "Units", 1.4e-8, db=db)
+    price_db.upsert("AWSStepFunctions", "us-east-1", "sfn:standard:transitions", "Transitions", 2.5e-5, db=db)
+    price_db.upsert("AWSStepFunctions", "us-east-1", "sfn:express:requests", "Requests", 1e-6, db=db)
+    price_db.upsert("AWSStepFunctions", "us-east-1", "sfn:express:duration", "GB-Second", 1.042e-5, db=db)
+    price_db.upsert("AmazonEventBridge", "us-east-1", "eventbridge:events", "Events", 1e-6, db=db)
+    price_db.upsert("AmazonVPC", "us-east-1", "transitgateway:hourly", "Hrs", 0.05, db=db)
+    price_db.upsert("AmazonVPC", "us-east-1", "transitgateway:data", "GB", 0.02, db=db)
+    price_db.upsert("AmazonS3Files", "us-east-1", "s3files:cache", "GB-Mo", 0.30, db=db)
+    price_db.upsert("AmazonS3Files", "us-east-1", "s3files:requests:get", "Requests", 4e-7, db=db)
+    price_db.upsert("AmazonS3Files", "us-east-1", "s3files:requests:put", "Requests", 5e-6, db=db)
+    price_db.upsert("AmazonES", "us-east-1", "opensearch:r6g.large.elasticsearch", "Hrs", 0.167, db=db)
+    price_db.upsert("AmazonES", "us-east-1", "opensearch:storage:gp2", "GB-Mo", 0.135, db=db)
+    price_db.upsert("AmazonES", "us-east-1", "opensearch:storage:gp3", "GB-Mo", 0.112, db=db)
+    price_db.upsert("AmazonRedshift", "us-east-1", "redshift:ra3.xlplus", "Hrs", 1.086, db=db)
+    price_db.upsert("AmazonRedshift", "us-east-1", "redshift:dc2.large", "Hrs", 0.25, db=db)
+    price_db.upsert("AmazonRedshift", "us-east-1", "redshift:storage", "GB-Mo", 0.024, db=db)
+    price_db.upsert("AWSBackup", "us-east-1", "backup:storage:warm", "GB-Mo", 0.05, db=db)
+    price_db.upsert("AWSBackup", "us-east-1", "backup:storage:cold", "GB-Mo", 0.01, db=db)
+    price_db.upsert("AWSBackup", "us-east-1", "backup:restore", "GB", 0.02, db=db)
+    price_db.upsert("AmazonMSK", "us-east-1", "msk:kafka.m5.large", "Hrs", 0.21, db=db)
+    price_db.upsert("AmazonMSK", "us-east-1", "msk:storage", "GB-Mo", 0.10, db=db)
+    price_db.upsert("AmazonVPC", "us-east-1", "eip:hourly", "Hrs", 0.005, db=db)
+    price_db.upsert("AWSCloudTrail", "us-east-1", "cloudtrail:management", "Events", 2.00, db=db)
+    price_db.upsert("AWSCloudTrail", "us-east-1", "cloudtrail:data", "Events", 0.10, db=db)
+    price_db.upsert("AWSCloudTrail", "us-east-1", "cloudtrail:insights", "Events", 0.35, db=db)
+    price_db.upsert("AmazonGuardDuty", "us-east-1", "guardduty:analysis", "GB", 4.00, db=db)
+    price_db.upsert("AmazonDocDB", "us-east-1", "docdb:db.r5.large", "Hrs", 0.277, db=db)
+    price_db.upsert("AmazonFSx", "us-east-1", "fsx:windows:storage:ssd", "GB-Mo", 0.13, db=db)
+    price_db.upsert("AmazonFSx", "us-east-1", "fsx:windows:storage:hdd", "GB-Mo", 0.013, db=db)
+    price_db.upsert("AmazonFSx", "us-east-1", "fsx:windows:throughput", "MBps-Mo", 2.20, db=db)
+    price_db.upsert("AWSCertificateManager", "us-east-1", "acmpca:monthly:general_purpose", "Mo", 400.00, db=db)
+    price_db.upsert("AWSCertificateManager", "us-east-1", "acmpca:monthly:short_lived", "Mo", 50.00, db=db)
+    price_db.upsert("AWSCertificateManager", "us-east-1", "acmpca:certificate", "Certificates", 0.75, db=db)
+    price_db.upsert("AmazonAthena", "us-east-1", "athena:scanned", "TB", 5.00, db=db)
+    price_db.upsert("AmazonFSx", "us-east-1", "fsx:lustre:SCRATCH2:SSD", "GB-Mo", 0.14, db=db)
+    price_db.upsert("AmazonFSx", "us-east-1", "fsx:lustre:PERSISTENT1:HDD", "GB-Mo", 0.025, db=db)
+    price_db.upsert("AmazonNeptune", "us-east-1", "neptune:db.r5.large", "Hrs", 0.348, db=db)
+    price_db.upsert("AWSGlobalAccelerator", "us-east-1", "globalaccelerator:hourly", "Hrs", 0.025, db=db)
+    price_db.upsert("AWSGlobalAccelerator", "us-east-1", "globalaccelerator:data", "GB", 0.015, db=db)
+    price_db.upsert("AmazonMQ", "us-east-1", "mq:mq.m5.large", "Hrs", 0.30, db=db)
+    price_db.upsert("AmazonMQ", "us-east-1", "mq:storage", "GB-Mo", 0.30, db=db)
+    price_db.upsert("AmazonVPC", "us-east-1", "vpn:sitetosite:hourly", "Hrs", 0.05, db=db)
+    price_db.upsert("AmazonVPC", "us-east-1", "vpn:clientvpn:association:hourly", "Hrs", 0.10, db=db)
+    price_db.upsert("AmazonVPC", "us-east-1", "vpn:clientvpn:connection:hourly", "Hrs", 0.05, db=db)
+    price_db.upsert("AWSDirectConnect", "us-east-1", "directconnect:port:1gbps", "Hrs", 0.30, db=db)
+    price_db.upsert("AWSDirectConnect", "us-east-1", "directconnect:port:10gbps", "Hrs", 2.25, db=db)
+    price_db.upsert("AWSAppSync", "us-east-1", "appsync:requests", "requests", 4.0, db=db)
+    price_db.upsert("AWSAppSync", "us-east-1", "appsync:connectionminutes", "minutes", 0.00002, db=db)
+    price_db.upsert("AmazonCognitoSync", "us-east-1", "cognito:mau", "users", 0.0055, db=db)
+    price_db.upsert("AWSGlue", "us-east-1", "glue:dpuhour", "DPU-Hour", 0.44, db=db)
+    price_db.upsert("AmazonSageMaker", "us-east-1", "sagemaker:ml.t3.medium", "Hrs", 0.0582, db=db)
+    price_db.upsert("AmazonSageMaker", "us-east-1", "sagemaker:ml.m5.xlarge", "Hrs", 0.269, db=db)
+    price_db.upsert("AWSCloudHSM", "us-east-1", "cloudhsm:hourly", "Hrs", 1.60, db=db)
+    price_db.upsert("AmazonMacie", "us-east-1", "macie:gb", "GB", 1.00, db=db)
+    price_db.upsert("AmazonInspectorV2", "us-east-1", "inspector:ec2", "months", 0.01, db=db)
+    price_db.upsert("AmazonInspectorV2", "us-east-1", "inspector:ecr", "images", 0.09, db=db)
+    price_db.upsert("AmazonInspectorV2", "us-east-1", "inspector:lambda", "months", 0.30, db=db)
     return db
 
 
@@ -696,6 +769,990 @@ def test_instance_unpriced_block_device_still_visible(tmp_db):
     assert resource.monthly_cost == pytest.approx(0.0104 * 730)  # instance cost unaffected
     [root] = resource.sub_resources
     assert root.no_price
+
+
+# ── EKS ──────────────────────────────────────────────────────────────────────
+
+
+def test_eks_cluster_flat_hourly_cost(tmp_db):
+    tf = _tf("aws_eks_cluster", {"name": "prod"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(0.10 * 730)
+    [comp] = resource.cost_components
+    assert not comp.usage_based
+
+
+def test_eks_cluster_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_eks_cluster", {"name": "prod"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── DynamoDB ─────────────────────────────────────────────────────────────────
+
+
+def test_dynamodb_provisioned_known_capacity_cost(tmp_db):
+    tf = _tf("aws_dynamodb_table", {
+        "name": "orders", "billing_mode": "PROVISIONED",
+        "read_capacity": 5, "write_capacity": 2,
+    })
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    expected = 5 * 0.00013 * 730 + 2 * 0.00065 * 730
+    assert resource.monthly_cost == pytest.approx(expected)
+    names = [c.name for c in resource.cost_components]
+    assert names == ["Storage", "Provisioned read capacity", "Provisioned write capacity"]
+    storage = resource.cost_components[0]
+    assert storage.usage_based
+    assert storage.monthly_cost is None
+
+
+def test_dynamodb_provisioned_is_default_billing_mode(tmp_db):
+    """terraform's own default when `billing_mode` is omitted."""
+    tf = _tf("aws_dynamodb_table", {"name": "orders", "read_capacity": 1, "write_capacity": 1})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.monthly_cost == pytest.approx(0.00013 * 730 + 0.00065 * 730)
+
+
+def test_dynamodb_ondemand_is_usage_based(tmp_db):
+    tf = _tf("aws_dynamodb_table", {"name": "orders", "billing_mode": "PAY_PER_REQUEST"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    names = [c.name for c in resource.cost_components]
+    assert names == ["Storage", "On-demand read requests", "On-demand write requests"]
+    read_comp = resource.cost_components[1]
+    assert read_comp.usage_based
+    assert read_comp.price == pytest.approx(1.25e-7 * 1_000_000)
+
+
+def test_dynamodb_unpriced_without_cached_storage_price(empty_db):
+    tf = _tf("aws_dynamodb_table", {"name": "orders"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── VPC Interface Endpoint ───────────────────────────────────────────────────
+
+
+def test_vpc_gateway_endpoint_is_free(tmp_db):
+    tf = _tf("aws_vpc_endpoint", {"vpc_endpoint_type": "Gateway", "service_name": "com.amazonaws.us-east-1.s3"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(0.0)
+
+
+def test_vpc_gateway_is_default_endpoint_type(tmp_db):
+    tf = _tf("aws_vpc_endpoint", {"service_name": "com.amazonaws.us-east-1.dynamodb"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.monthly_cost == pytest.approx(0.0)
+
+
+def test_vpc_interface_endpoint_priced_per_az(tmp_db):
+    tf = _tf("aws_vpc_endpoint", {
+        "vpc_endpoint_type": "Interface",
+        "service_name": "com.amazonaws.us-east-1.ec2",
+        "subnet_ids": ["subnet-1", "subnet-2"],
+    })
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(0.01 * 2 * 730)
+    fixed, data = resource.cost_components
+    assert not fixed.usage_based
+    assert data.usage_based
+    assert data.price == pytest.approx(0.01)
+
+
+def test_vpc_interface_endpoint_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_vpc_endpoint", {"vpc_endpoint_type": "Interface", "subnet_ids": ["subnet-1"]})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── SNS ──────────────────────────────────────────────────────────────────────
+
+
+def test_sns_topic_is_usage_based(tmp_db):
+    tf = _tf("aws_sns_topic", {"name": "alerts"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    [comp] = resource.cost_components
+    assert comp.usage_based
+    assert comp.price == pytest.approx(5e-7 * 1_000_000)
+
+
+def test_sns_topic_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_sns_topic", {"name": "alerts"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── EFS ──────────────────────────────────────────────────────────────────────
+
+
+def test_efs_file_system_is_usage_based(tmp_db):
+    tf = _tf("aws_efs_file_system", {})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    [comp] = resource.cost_components
+    assert comp.usage_based
+    assert comp.price == pytest.approx(0.30)
+
+
+def test_efs_file_system_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_efs_file_system", {})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── ECR ──────────────────────────────────────────────────────────────────────
+
+
+def test_ecr_repository_is_usage_based(tmp_db):
+    tf = _tf("aws_ecr_repository", {"name": "app"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    [comp] = resource.cost_components
+    assert comp.usage_based
+    assert comp.price == pytest.approx(0.10)
+
+
+def test_ecr_repository_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_ecr_repository", {"name": "app"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── API Gateway ──────────────────────────────────────────────────────────────
+
+
+def test_api_gateway_rest_api_is_usage_based(tmp_db):
+    tf = _tf("aws_api_gateway_rest_api", {"name": "api"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    [comp] = resource.cost_components
+    assert comp.usage_based
+    assert comp.price == pytest.approx(3.5e-6 * 1_000_000)
+
+
+def test_api_gateway_rest_api_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_api_gateway_rest_api", {"name": "api"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+def test_api_gateway_v2_http_api_is_usage_based(tmp_db):
+    tf = _tf("aws_apigatewayv2_api", {"name": "api", "protocol_type": "HTTP"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    [comp] = resource.cost_components
+    assert comp.price == pytest.approx(1.0e-6 * 1_000_000)
+
+
+def test_api_gateway_v2_websocket_unsupported(tmp_db):
+    tf = _tf("aws_apigatewayv2_api", {"name": "api", "protocol_type": "WEBSOCKET"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.no_price
+
+
+# ── CloudFront ───────────────────────────────────────────────────────────────
+
+
+def test_cloudfront_distribution_is_usage_based(tmp_db):
+    tf = _tf("aws_cloudfront_distribution", {})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    data, requests = resource.cost_components
+    assert data.usage_based and data.price == pytest.approx(0.085)
+    assert requests.usage_based and requests.price == pytest.approx(1.0e-5 * 1_000_000)
+
+
+def test_cloudfront_distribution_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_cloudfront_distribution", {})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── Kinesis ──────────────────────────────────────────────────────────────────
+
+
+def test_kinesis_provisioned_known_shard_cost(tmp_db):
+    tf = _tf("aws_kinesis_stream", {"name": "events", "shard_count": 4})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(4 * 0.015 * 730)
+    fixed, payload = resource.cost_components
+    assert not fixed.usage_based
+    assert payload.usage_based
+
+
+def test_kinesis_provisioned_is_default_mode(tmp_db):
+    tf = _tf("aws_kinesis_stream", {"name": "events", "shard_count": 1})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.monthly_cost == pytest.approx(0.015 * 730)
+
+
+def test_kinesis_on_demand_mode_unsupported(tmp_db):
+    tf = _tf("aws_kinesis_stream", {
+        "name": "events",
+        "stream_mode_details": [{"stream_mode": "ON_DEMAND"}],
+    })
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.no_price
+
+
+def test_kinesis_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_kinesis_stream", {"name": "events", "shard_count": 1})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── Step Functions ───────────────────────────────────────────────────────────
+
+
+def test_sfn_standard_is_usage_based(tmp_db):
+    tf = _tf("aws_sfn_state_machine", {"name": "workflow"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    [comp] = resource.cost_components
+    assert comp.name == "State transitions"
+    assert comp.price == pytest.approx(2.5e-5 * 1_000)
+
+
+def test_sfn_express_is_usage_based(tmp_db):
+    tf = _tf("aws_sfn_state_machine", {"name": "workflow", "type": "EXPRESS"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    names = [c.name for c in resource.cost_components]
+    assert names == ["Requests", "Duration"]
+
+
+def test_sfn_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_sfn_state_machine", {"name": "workflow"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── EventBridge ──────────────────────────────────────────────────────────────
+
+
+def test_eventbridge_event_bus_is_usage_based(tmp_db):
+    tf = _tf("aws_cloudwatch_event_bus", {"name": "custom-bus"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    [comp] = resource.cost_components
+    assert comp.price == pytest.approx(1e-6 * 1_000_000)
+
+
+def test_eventbridge_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_cloudwatch_event_bus", {"name": "custom-bus"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── Transit Gateway ──────────────────────────────────────────────────────────
+
+
+def test_transit_gateway_attachment_flat_hourly_cost(tmp_db):
+    tf = _tf("aws_ec2_transit_gateway_vpc_attachment", {"vpc_id": "vpc-1"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(0.05 * 730)
+    fixed, data = resource.cost_components
+    assert not fixed.usage_based
+    assert data.usage_based
+
+
+def test_transit_gateway_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_ec2_transit_gateway_vpc_attachment", {"vpc_id": "vpc-1"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── S3 Files ─────────────────────────────────────────────────────────────────
+
+
+def test_s3files_file_system_is_usage_based(tmp_db):
+    tf = _tf("aws_s3files_file_system", {"name": "shared-data"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    names = [c.name for c in resource.cost_components]
+    assert names == ["Cache storage", "GET requests", "PUT requests"]
+    cache, get, put = resource.cost_components
+    assert all(c.usage_based for c in (cache, get, put))
+    assert cache.price == pytest.approx(0.30)
+    assert get.price == pytest.approx(4e-7 * 1_000_000)
+    assert put.price == pytest.approx(5e-6 * 1_000_000)
+
+
+def test_s3files_file_system_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_s3files_file_system", {"name": "shared-data"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+def test_s3files_mount_target_is_free(tmp_db):
+    tf = _tf("aws_s3files_mount_target", {"file_system_id": "fs-1", "subnet_id": "subnet-1"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(0.0)
+
+
+def test_s3files_access_point_is_free(tmp_db):
+    tf = _tf("aws_s3files_access_point", {"file_system_id": "fs-1"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(0.0)
+
+
+# ── OpenSearch ───────────────────────────────────────────────────────────────
+
+
+def test_opensearch_domain_instance_and_storage(tmp_db):
+    tf = _tf(
+        "aws_opensearch_domain",
+        {
+            "domain_name": "logs",
+            "cluster_config": {"instance_type": "r6g.large.elasticsearch", "instance_count": 3},
+            "ebs_options": {"ebs_enabled": True, "volume_size": 100, "volume_type": "gp3"},
+        },
+    )
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    instances, storage = resource.cost_components
+    assert not instances.usage_based
+    assert not storage.usage_based
+    expected = 3 * 0.167 * 730 + 100 * 0.112
+    assert resource.monthly_cost == pytest.approx(expected)
+
+
+def test_opensearch_domain_default_volume_type_is_gp2(tmp_db):
+    tf = _tf(
+        "aws_opensearch_domain",
+        {
+            "domain_name": "logs",
+            "cluster_config": {"instance_type": "r6g.large.elasticsearch", "instance_count": 1},
+            "ebs_options": {"ebs_enabled": True, "volume_size": 50},
+        },
+    )
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    expected = 1 * 0.167 * 730 + 50 * 0.135
+    assert resource.monthly_cost == pytest.approx(expected)
+
+
+def test_opensearch_domain_unpriced_without_cached_price(empty_db):
+    tf = _tf(
+        "aws_opensearch_domain",
+        {
+            "domain_name": "logs",
+            "cluster_config": {"instance_type": "r6g.large.elasticsearch", "instance_count": 1},
+        },
+    )
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+def test_opensearch_domain_missing_instance_type_unpriced(tmp_db):
+    tf = _tf("aws_opensearch_domain", {"domain_name": "logs", "cluster_config": {}})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.no_price
+
+
+# ── Redshift ─────────────────────────────────────────────────────────────────
+
+
+def test_redshift_ra3_cluster_has_usage_based_storage(tmp_db):
+    tf = _tf("aws_redshift_cluster", {"cluster_identifier": "warehouse", "node_type": "ra3.xlplus", "number_of_nodes": 2})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(2 * 1.086 * 730)
+    compute, storage = resource.cost_components
+    assert not compute.usage_based
+    assert storage.usage_based
+    assert storage.price == pytest.approx(0.024)
+
+
+def test_redshift_dc2_cluster_has_no_storage_component(tmp_db):
+    tf = _tf("aws_redshift_cluster", {"cluster_identifier": "warehouse", "node_type": "dc2.large", "number_of_nodes": 1})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert len(resource.cost_components) == 1
+    assert resource.monthly_cost == pytest.approx(1 * 0.25 * 730)
+
+
+def test_redshift_cluster_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_redshift_cluster", {"cluster_identifier": "warehouse", "node_type": "ra3.xlplus", "number_of_nodes": 1})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+def test_redshift_cluster_missing_node_type_unpriced(tmp_db):
+    tf = _tf("aws_redshift_cluster", {"cluster_identifier": "warehouse"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.no_price
+
+
+# ── AWS Backup ───────────────────────────────────────────────────────────────
+
+
+def test_backup_vault_is_usage_based(tmp_db):
+    tf = _tf("aws_backup_vault", {"name": "prod-vault"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    names = [c.name for c in resource.cost_components]
+    assert names == ["Warm storage", "Cold storage", "Restore"]
+    assert all(c.usage_based for c in resource.cost_components)
+
+
+def test_backup_vault_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_backup_vault", {"name": "prod-vault"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+def test_backup_plan_is_free(tmp_db):
+    tf = _tf("aws_backup_plan", {"name": "daily"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(0.0)
+
+
+# ── MSK ──────────────────────────────────────────────────────────────────────
+
+
+def test_msk_cluster_broker_and_storage(tmp_db):
+    tf = _tf(
+        "aws_msk_cluster",
+        {
+            "cluster_name": "events",
+            "broker_node_group_info": {
+                "instance_type": "kafka.m5.large",
+                "number_of_broker_nodes": 3,
+                "storage_info": {"ebs_storage_info": {"volume_size": 200}},
+            },
+        },
+    )
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    broker, storage = resource.cost_components
+    assert not broker.usage_based
+    assert not storage.usage_based
+    expected = 3 * 0.21 * 730 + 3 * 200 * 0.10
+    assert resource.monthly_cost == pytest.approx(expected)
+
+
+def test_msk_cluster_without_storage_info_has_no_storage_component(tmp_db):
+    tf = _tf(
+        "aws_msk_cluster",
+        {
+            "cluster_name": "events",
+            "broker_node_group_info": {"instance_type": "kafka.m5.large", "number_of_broker_nodes": 2},
+        },
+    )
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert len(resource.cost_components) == 1
+    assert resource.monthly_cost == pytest.approx(2 * 0.21 * 730)
+
+
+def test_msk_cluster_unpriced_without_cached_price(empty_db):
+    tf = _tf(
+        "aws_msk_cluster",
+        {"cluster_name": "events", "broker_node_group_info": {"instance_type": "kafka.m5.large"}},
+    )
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+def test_msk_cluster_missing_instance_type_unpriced(tmp_db):
+    tf = _tf("aws_msk_cluster", {"cluster_name": "events", "broker_node_group_info": {}})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.no_price
+
+
+# ── Elastic IP ───────────────────────────────────────────────────────────────
+
+
+def test_eip_flat_monthly_cost(tmp_db):
+    tf = _tf("aws_eip", {"domain": "vpc"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(0.005 * 730)
+    [comp] = resource.cost_components
+    assert not comp.usage_based
+
+
+def test_eip_unattached_prices_the_same_as_attached(tmp_db):
+    """No attachment field changes the price — that's the whole point of
+    the post-Feb-2024 billing model."""
+    attached = _tf("aws_eip", {"domain": "vpc", "instance": "i-123"})
+    unattached = _tf("aws_eip", {"domain": "vpc"})
+    [r1] = price_resources([attached], "us-east-1", db=tmp_db)
+    [r2] = price_resources([unattached], "us-east-1", db=tmp_db)
+    assert r1.monthly_cost == pytest.approx(r2.monthly_cost)
+
+
+def test_eip_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_eip", {"domain": "vpc"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── CloudTrail ───────────────────────────────────────────────────────────────
+
+
+def test_cloudtrail_all_components_usage_based(tmp_db):
+    tf = _tf("aws_cloudtrail", {"name": "main"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    names = [c.name for c in resource.cost_components]
+    assert names == [
+        "Management events (beyond first free trail)", "Data events", "Insights events",
+    ]
+    assert all(c.usage_based for c in resource.cost_components)
+
+
+def test_cloudtrail_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_cloudtrail", {"name": "main"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── GuardDuty ────────────────────────────────────────────────────────────────
+
+
+def test_guardduty_detector_is_usage_based(tmp_db):
+    tf = _tf("aws_guardduty_detector", {"enable": True})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    [comp] = resource.cost_components
+    assert comp.usage_based
+    assert comp.price == pytest.approx(4.00)
+
+
+def test_guardduty_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_guardduty_detector", {"enable": True})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── DocumentDB ───────────────────────────────────────────────────────────────
+
+
+def test_docdb_cluster_instance_flat_monthly_cost(tmp_db):
+    tf = _tf("aws_docdb_cluster_instance", {"identifier": "db-1", "instance_class": "db.r5.large"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(0.277 * 730)
+
+
+def test_docdb_cluster_instance_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_docdb_cluster_instance", {"identifier": "db-1", "instance_class": "db.r5.large"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+def test_docdb_cluster_instance_missing_instance_class_unpriced(tmp_db):
+    tf = _tf("aws_docdb_cluster_instance", {"identifier": "db-1"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.no_price
+
+
+# ── FSx for Windows ──────────────────────────────────────────────────────────
+
+
+def test_fsx_windows_ssd_storage_and_throughput(tmp_db):
+    tf = _tf(
+        "aws_fsx_windows_file_system",
+        {"storage_capacity": 300, "throughput_capacity": 16},
+    )
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    storage, throughput = resource.cost_components
+    assert not storage.usage_based
+    assert not throughput.usage_based
+    expected = 300 * 0.13 + 16 * 2.20
+    assert resource.monthly_cost == pytest.approx(expected)
+
+
+def test_fsx_windows_hdd_storage(tmp_db):
+    tf = _tf(
+        "aws_fsx_windows_file_system",
+        {"storage_capacity": 2000, "storage_type": "HDD", "throughput_capacity": 8},
+    )
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    expected = 2000 * 0.013 + 8 * 2.20
+    assert resource.monthly_cost == pytest.approx(expected)
+
+
+def test_fsx_windows_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_fsx_windows_file_system", {"storage_capacity": 300, "throughput_capacity": 16})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+def test_fsx_windows_missing_throughput_capacity_unpriced(tmp_db):
+    tf = _tf("aws_fsx_windows_file_system", {"storage_capacity": 300})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.no_price
+
+
+# ── ACM Private CA ───────────────────────────────────────────────────────────
+
+
+def test_acmpca_general_purpose_default(tmp_db):
+    tf = _tf("aws_acmpca_certificate_authority", {"type": "ROOT"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(400.00)
+    flat, issued = resource.cost_components
+    assert not flat.usage_based
+    assert issued.usage_based
+    assert issued.price == pytest.approx(0.75)
+
+
+def test_acmpca_short_lived(tmp_db):
+    tf = _tf("aws_acmpca_certificate_authority", {"type": "ROOT", "usage_mode": "SHORT_LIVED_CERTIFICATE"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(50.00)
+
+
+def test_acmpca_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_acmpca_certificate_authority", {"type": "ROOT"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── Athena ───────────────────────────────────────────────────────────────────
+
+
+def test_athena_workgroup_is_usage_based(tmp_db):
+    tf = _tf("aws_athena_workgroup", {"name": "primary"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    [comp] = resource.cost_components
+    assert comp.usage_based
+    assert comp.price == pytest.approx(5.00)
+
+
+def test_athena_workgroup_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_athena_workgroup", {"name": "primary"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── FSx for Lustre ───────────────────────────────────────────────────────────
+
+
+def test_fsx_lustre_storage_by_deployment_and_type(tmp_db):
+    tf = _tf(
+        "aws_fsx_lustre_file_system",
+        {"storage_capacity": 1200, "deployment_type": "SCRATCH_2"},
+    )
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(1200 * 0.14)
+
+
+def test_fsx_lustre_persistent_hdd(tmp_db):
+    tf = _tf(
+        "aws_fsx_lustre_file_system",
+        {"storage_capacity": 5000, "deployment_type": "PERSISTENT_1", "storage_type": "HDD"},
+    )
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(5000 * 0.025)
+
+
+def test_fsx_lustre_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_fsx_lustre_file_system", {"storage_capacity": 1200, "deployment_type": "SCRATCH_2"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── Neptune ──────────────────────────────────────────────────────────────────
+
+
+def test_neptune_cluster_instance_flat_monthly_cost(tmp_db):
+    tf = _tf("aws_neptune_cluster_instance", {"identifier": "db-1", "instance_class": "db.r5.large"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(0.348 * 730)
+
+
+def test_neptune_cluster_instance_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_neptune_cluster_instance", {"identifier": "db-1", "instance_class": "db.r5.large"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── Global Accelerator ───────────────────────────────────────────────────────
+
+
+def test_global_accelerator_flat_plus_usage_based_data(tmp_db):
+    tf = _tf("aws_globalaccelerator_accelerator", {"name": "accel"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(0.025 * 730)
+    fixed, data = resource.cost_components
+    assert not fixed.usage_based
+    assert data.usage_based
+    assert data.price == pytest.approx(0.015)
+
+
+def test_global_accelerator_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_globalaccelerator_accelerator", {"name": "accel"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+# ── Amazon MQ ────────────────────────────────────────────────────────────────
+
+
+def test_mq_broker_single_instance(tmp_db):
+    tf = _tf("aws_mq_broker", {"broker_name": "orders", "host_instance_type": "mq.m5.large"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(1 * 0.30 * 730)
+    broker, storage = resource.cost_components
+    assert not broker.usage_based
+    assert storage.usage_based
+
+
+def test_mq_broker_active_standby_doubles_broker_count(tmp_db):
+    tf = _tf(
+        "aws_mq_broker",
+        {"broker_name": "orders", "host_instance_type": "mq.m5.large", "deployment_mode": "ACTIVE_STANDBY_MULTI_AZ"},
+    )
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(2 * 0.30 * 730)
+
+
+def test_mq_broker_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_mq_broker", {"broker_name": "orders", "host_instance_type": "mq.m5.large"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+def test_vpn_connection_flat_hourly(tmp_db):
+    tf = _tf("aws_vpn_connection", {"customer_gateway_id": "cgw-1", "type": "ipsec.1"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(0.05 * 730)
+
+
+def test_vpn_connection_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_vpn_connection", {"customer_gateway_id": "cgw-1", "type": "ipsec.1"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+def test_client_vpn_endpoint_fully_usage_based(tmp_db):
+    tf = _tf("aws_ec2_client_vpn_endpoint", {"description": "corp-vpn"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    names = {c.name for c in resource.cost_components}
+    assert names == {"Subnet associations", "Active connections"}
+    assert all(c.usage_based for c in resource.cost_components)
+
+
+def test_dx_connection_by_bandwidth(tmp_db):
+    tf = _tf("aws_dx_connection", {"name": "corp-dx", "bandwidth": "1Gbps"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(0.30 * 730)
+
+
+def test_dx_hosted_connection_by_bandwidth(tmp_db):
+    tf = _tf("aws_dx_hosted_connection", {"name": "corp-dx", "bandwidth": "10Gbps"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(2.25 * 730)
+
+
+def test_dx_connection_unpriced_missing_bandwidth(tmp_db):
+    tf = _tf("aws_dx_connection", {"name": "corp-dx"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.no_price
+
+
+def test_appsync_graphql_api_fully_usage_based(tmp_db):
+    tf = _tf("aws_appsync_graphql_api", {"name": "orders-api"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    names = {c.name for c in resource.cost_components}
+    assert names == {"Query and data modification operations", "Real-time subscription connection-minutes"}
+    assert all(c.usage_based for c in resource.cost_components)
+    req_comp = next(c for c in resource.cost_components if c.name == "Query and data modification operations")
+    assert req_comp.price == pytest.approx(4.0 * 1_000_000)
+
+
+def test_cognito_user_pool_fully_usage_based(tmp_db):
+    tf = _tf("aws_cognito_user_pool", {"name": "users"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    [comp] = resource.cost_components
+    assert comp.name == "Monthly active users"
+    assert comp.usage_based
+    assert comp.price == pytest.approx(0.0055)
+
+
+def test_cognito_user_pool_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_cognito_user_pool", {"name": "users"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+def test_glue_job_fully_usage_based(tmp_db):
+    tf = _tf("aws_glue_job", {"name": "etl-job", "max_capacity": 10})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    [comp] = resource.cost_components
+    assert comp.name == "DPU-hours"
+    assert comp.usage_based
+    assert comp.price == pytest.approx(0.44)
+
+
+def test_glue_crawler_fully_usage_based(tmp_db):
+    tf = _tf("aws_glue_crawler", {"name": "catalog-crawler"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    [comp] = resource.cost_components
+    assert comp.usage_based
+    assert comp.price == pytest.approx(0.44)
+
+
+def test_glue_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_glue_job", {"name": "etl-job"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+def test_sagemaker_notebook_instance_flat_hourly(tmp_db):
+    tf = _tf("aws_sagemaker_notebook_instance", {"name": "notebook", "instance_type": "ml.t3.medium"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(0.0582 * 730)
+
+
+def test_sagemaker_notebook_instance_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_sagemaker_notebook_instance", {"name": "notebook", "instance_type": "ml.t3.medium"})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+def test_sagemaker_endpoint_configuration_single_variant(tmp_db):
+    tf = _tf(
+        "aws_sagemaker_endpoint_configuration",
+        {"name": "orders-endpoint", "production_variants": [
+            {"variant_name": "primary", "instance_type": "ml.m5.xlarge", "initial_instance_count": 2},
+        ]},
+    )
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(2 * 0.269 * 730)
+
+
+def test_sagemaker_endpoint_configuration_bare_dict_variant(tmp_db):
+    tf = _tf(
+        "aws_sagemaker_endpoint_configuration",
+        {"name": "orders-endpoint", "production_variants": {
+            "variant_name": "primary", "instance_type": "ml.t3.medium", "initial_instance_count": 1,
+        }},
+    )
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(0.0582 * 730)
+
+
+def test_sagemaker_endpoint_configuration_serverless_variant_unpriced_component(tmp_db):
+    tf = _tf(
+        "aws_sagemaker_endpoint_configuration",
+        {"name": "orders-endpoint", "production_variants": [
+            {"variant_name": "serverless", "serverless_config": {"max_concurrency": 5}},
+        ]},
+    )
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.no_price
+
+
+def test_cloudhsm_hsm_flat_hourly(tmp_db):
+    tf = _tf("aws_cloudhsm_v2_hsm", {"cluster_id": "cluster-1"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(1.60 * 730)
+
+
+def test_cloudhsm_cluster_free(tmp_db):
+    tf = _tf("aws_cloudhsm_v2_cluster", {"hsm_type": "hsm1.medium"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost == pytest.approx(0.0)
+
+
+def test_macie_account_fully_usage_based(tmp_db):
+    tf = _tf("aws_macie2_account", {})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    [comp] = resource.cost_components
+    assert comp.name == "Data evaluated (S3)"
+    assert comp.usage_based
+    assert comp.price == pytest.approx(1.00)
+
+
+def test_macie_classification_job_fully_usage_based(tmp_db):
+    tf = _tf("aws_macie2_classification_job", {"name": "job1", "job_type": "ONE_TIME"})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    [comp] = resource.cost_components
+    assert comp.usage_based
+
+
+def test_macie_unpriced_without_cached_price(empty_db):
+    tf = _tf("aws_macie2_account", {})
+    [resource] = price_resources([tf], "us-east-1", db=empty_db)
+    assert resource.no_price
+
+
+def test_inspector_enabler_multiple_resource_types(tmp_db):
+    tf = _tf("aws_inspector2_enabler", {"account_ids": ["123456789012"], "resource_types": ["EC2", "ECR", "LAMBDA"]})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.is_supported
+    assert resource.monthly_cost is None
+    names = {c.name for c in resource.cost_components}
+    assert names == {"EC2 instance scanning", "ECR image scanning", "Lambda function scanning"}
+    assert all(c.usage_based for c in resource.cost_components)
+
+
+def test_inspector_enabler_unpriced_without_matching_resource_type(tmp_db):
+    tf = _tf("aws_inspector2_enabler", {"account_ids": ["123456789012"], "resource_types": ["UNKNOWN"]})
+    [resource] = price_resources([tf], "us-east-1", db=tmp_db)
+    assert resource.no_price
 
 
 def test_unsupported_resource_type_skipped(tmp_db):

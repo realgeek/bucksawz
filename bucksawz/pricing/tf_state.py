@@ -144,6 +144,89 @@ def parse_prior(data: dict) -> list[TFResource]:
     return [r for r in out if "aws" in r.provider_name]
 
 
+def _index_suffix(index_key: Any) -> str:
+    if index_key is None:
+        return ""
+    if isinstance(index_key, str):
+        return f'["{index_key}"]'
+    return f"[{index_key}]"
+
+
+def parse_raw_state(data: dict) -> list[TFResource]:
+    """
+    Parse a raw `terraform.tfstate` export (e.g. from `terraform state pull`),
+    as opposed to `terraform show -json`. Top level is `resources: [{module,
+    mode, type, name, provider, instances: [{index_key, attributes}]}]` —
+    structurally different from show-json's `values.root_module.resources`
+    (attributes live under each instance, not a single `values` dict, and
+    there's no pre-resolved `address`). Multi-instance resources
+    (`count`/`for_each`) are split into one TFResource per instance, address
+    reconstructed the way Terraform itself would render it.
+
+    Newer AWS provider versions accept a per-resource `region` argument;
+    when a resource sets it, it lands in `attributes.region` and is used
+    directly here — this is often the only region signal available at all,
+    since a raw state file (unlike a plan) carries no `configuration` block
+    to resolve provider aliases from.
+    """
+    out: list[TFResource] = []
+    for r in data.get("resources") or []:
+        if r.get("mode") not in (None, "managed"):
+            continue
+        rtype = r.get("type", "")
+        name = r.get("name", "")
+        module = r.get("module")
+        provider = r.get("provider", "")
+        prefix = f"{module}." if module else ""
+        for instance in r.get("instances") or []:
+            suffix = _index_suffix(instance.get("index_key"))
+            attrs = instance.get("attributes") or {}
+            out.append(
+                TFResource(
+                    address=f"{prefix}{rtype}.{name}{suffix}",
+                    type=rtype,
+                    name=name,
+                    provider_name=provider,
+                    values=attrs,
+                    region=attrs.get("region"),
+                )
+            )
+    return [r for r in out if "aws" in r.provider_name]
+
+
+def parse_raw_multi_stack(data: dict[str, dict]) -> dict[str, list[TFResource]]:
+    """combined.json shape: {stack_path: <raw tfstate dict>, ...}."""
+    return {stack: parse_raw_state(state) for stack, state in data.items()}
+
+
+def parse_raw_flat(entries: list[dict]) -> dict[str, list[TFResource]]:
+    """combined_flat.json shape: a flat list of raw-state resource blocks,
+    each tagged with a `_stack` key naming which stack it came from."""
+    grouped: dict[str, list[dict]] = {}
+    for entry in entries:
+        grouped.setdefault(entry.get("_stack", ""), []).append(entry)
+    return {stack: parse_raw_state({"resources": resources}) for stack, resources in grouped.items()}
+
+
+def detect_format(data: Any) -> str:
+    """
+    One of: "show_json" (plan/state via `terraform show -json`), "raw_state"
+    (a single raw tfstate export), "raw_multi_stack" (combined.json: a dict
+    of stack path -> raw tfstate), "raw_flat" (combined_flat.json: a flat
+    list of raw-state resource blocks tagged with `_stack`), or "unknown".
+    """
+    if isinstance(data, list):
+        return "raw_flat"
+    if isinstance(data, dict):
+        if "values" in data or "planned_values" in data or "resource_changes" in data:
+            return "show_json"
+        if "resources" in data and isinstance(data.get("resources"), list):
+            return "raw_state"
+        if data and all(isinstance(v, dict) and "resources" in v for v in data.values()):
+            return "raw_multi_stack"
+    return "unknown"
+
+
 def parse_json(text: str) -> list[TFResource]:
     data = json.loads(text)
     return parse_state(data, _region_map_from_configuration(data))

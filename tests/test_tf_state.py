@@ -1,6 +1,9 @@
 """Tests for parsing `terraform show -json` output into flat resource configs."""
 from pathlib import Path
-from bucksawz.pricing.tf_state import parse_file, parse_json, parse_prior, parse_state
+from bucksawz.pricing.tf_state import (
+    detect_format, parse_file, parse_json, parse_prior, parse_raw_flat,
+    parse_raw_multi_stack, parse_raw_state, parse_state,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tf_state_minimal.json"
 
@@ -217,3 +220,116 @@ def test_parse_prior_resolves_region_from_resource_changes_fallback():
     }
     resources = parse_prior(data)
     assert resources[0].region == "us-west-2"
+
+
+# ── Raw tfstate export (not `terraform show -json`) ────────────────────────
+
+
+def _raw_resource(rtype, name, attrs, module=None, provider='provider["registry.opentofu.org/hashicorp/aws"]', mode="managed", index_key=None):
+    return {
+        "module": module,
+        "mode": mode,
+        "type": rtype,
+        "name": name,
+        "provider": provider,
+        "instances": [{"index_key": index_key, "attributes": attrs}],
+    }
+
+
+def test_parse_raw_state_basic_resource():
+    data = {
+        "terraform_version": "1.11.5",
+        "resources": [_raw_resource("aws_instance", "web", {"instance_type": "t3.micro", "region": "us-east-1"})],
+    }
+    [r] = parse_raw_state(data)
+    assert r.address == "aws_instance.web"
+    assert r.type == "aws_instance"
+    assert r.values["instance_type"] == "t3.micro"
+    assert r.region == "us-east-1"
+
+
+def test_parse_raw_state_module_prefix_and_index_key():
+    data = {
+        "terraform_version": "1.11.5",
+        "resources": [
+            _raw_resource("aws_lb_listener_rule", "svc", {"priority": 1}, module="module.network", index_key="production"),
+        ],
+    }
+    [r] = parse_raw_state(data)
+    assert r.address == 'module.network.aws_lb_listener_rule.svc["production"]'
+
+
+def test_parse_raw_state_numeric_index_key():
+    data = {
+        "terraform_version": "1.11.5",
+        "resources": [_raw_resource("aws_instance", "web", {}, index_key=0)],
+    }
+    [r] = parse_raw_state(data)
+    assert r.address == "aws_instance.web[0]"
+
+
+def test_parse_raw_state_excludes_data_sources():
+    data = {
+        "terraform_version": "1.11.5",
+        "resources": [
+            _raw_resource("aws_instance", "web", {}),
+            _raw_resource("aws_ami", "latest", {}, mode="data"),
+        ],
+    }
+    resources = parse_raw_state(data)
+    assert [r.type for r in resources] == ["aws_instance"]
+
+
+def test_parse_raw_state_excludes_non_aws_provider():
+    data = {
+        "terraform_version": "1.11.5",
+        "resources": [_raw_resource("random_id", "x", {}, provider='provider["registry.opentofu.org/hashicorp/random"]')],
+    }
+    assert parse_raw_state(data) == []
+
+
+def test_parse_raw_multi_stack_groups_by_key():
+    data = {
+        "stack-a": {"terraform_version": "1.11.5", "resources": [_raw_resource("aws_instance", "web", {})]},
+        "stack-b": {"terraform_version": "1.11.5", "resources": [_raw_resource("aws_s3_bucket", "data", {})]},
+    }
+    by_stack = parse_raw_multi_stack(data)
+    assert set(by_stack) == {"stack-a", "stack-b"}
+    assert [r.type for r in by_stack["stack-a"]] == ["aws_instance"]
+    assert [r.type for r in by_stack["stack-b"]] == ["aws_s3_bucket"]
+
+
+def test_parse_raw_flat_groups_by_stack_tag():
+    entries = [
+        {**_raw_resource("aws_instance", "web", {}), "_stack": "stack-a"},
+        {**_raw_resource("aws_s3_bucket", "data", {}), "_stack": "stack-b"},
+        {**_raw_resource("aws_lambda_function", "fn", {}), "_stack": "stack-a"},
+    ]
+    by_stack = parse_raw_flat(entries)
+    assert set(by_stack) == {"stack-a", "stack-b"}
+    assert {r.type for r in by_stack["stack-a"]} == {"aws_instance", "aws_lambda_function"}
+    assert [r.type for r in by_stack["stack-b"]] == ["aws_s3_bucket"]
+
+
+def test_detect_format_show_json_plan():
+    assert detect_format({"planned_values": {}}) == "show_json"
+    assert detect_format({"values": {}}) == "show_json"
+    assert detect_format({"resource_changes": []}) == "show_json"
+
+
+def test_detect_format_raw_state():
+    assert detect_format({"terraform_version": "1.11.5", "resources": []}) == "raw_state"
+
+
+def test_detect_format_raw_multi_stack():
+    data = {"stack-a": {"resources": []}, "stack-b": {"resources": []}}
+    assert detect_format(data) == "raw_multi_stack"
+
+
+def test_detect_format_raw_flat():
+    assert detect_format([{"_stack": "a"}]) == "raw_flat"
+
+
+def test_detect_format_unknown():
+    assert detect_format({"foo": "bar"}) == "unknown"
+    assert detect_format({}) == "unknown"
