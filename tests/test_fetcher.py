@@ -987,11 +987,11 @@ def test_fetch_kinesis_ignores_extended_retention(fake_pricing, tmp_db):
 def test_fetch_stepfunctions_standard_and_express(fake_pricing, tmp_db):
     fake_pricing([
         _product("", {"usagetype": "StateTransition"}, _dim(0.000025)),
-        _product("", {"usagetype": "ExpressWorkflowsRequest"}, _dim(0.000001)),
-        _product("", {"usagetype": "ExpressWorkflowsDuration"}, _dim(0.00001042, unit="GB-Second")),
+        _product("", {"usagetype": "StepFunctions-Request"}, _dim(0.000001)),
+        _product("", {"usagetype": "StepFunctions-GB-Second"}, _dim(0.00001042, unit="GB-Second")),
     ])
     assert fetcher.fetch_stepfunctions("us-east-1", db=tmp_db) == 3
-    assert _keys("AWSStepFunctions", "us-east-1", tmp_db) == {
+    assert _keys("AmazonStates", "us-east-1", tmp_db) == {
         "sfn:standard:transitions": pytest.approx(0.000025),
         "sfn:express:requests": pytest.approx(0.000001),
         "sfn:express:duration": pytest.approx(0.00001042),
@@ -1006,7 +1006,7 @@ def test_fetch_eventbridge_custom_events(fake_pricing, tmp_db):
         _product("", {"usagetype": "PutEvents-Event-64K-Chunks"}, _dim(1.00, unit="Events")),
     ])
     assert fetcher.fetch_eventbridge("us-east-1", db=tmp_db) == 1
-    assert _keys("AmazonEventBridge", "us-east-1", tmp_db) == {"eventbridge:events": pytest.approx(1.00)}
+    assert _keys("AWSEvents", "us-east-1", tmp_db) == {"eventbridge:events": pytest.approx(1.00)}
 
 
 # ── Transit Gateway ──────────────────────────────────────────────────────────
@@ -1027,18 +1027,29 @@ def test_fetch_transit_gateway_hourly_and_data(fake_pricing, tmp_db):
 # ── S3 Files ─────────────────────────────────────────────────────────────────
 
 
-def test_fetch_s3files_cache_and_requests(fake_pricing, tmp_db):
+def test_fetch_s3files_storage_write_and_read(fake_pricing, tmp_db):
     fake_pricing([
-        _product("Storage", {"usagetype": "S3Files-Cache-Storage"}, _dim(0.30, unit="GB-Mo")),
-        _product("API Request", {"usagetype": "S3Files-Requests-GET"}, _dim(0.0000004, unit="Requests")),
-        _product("API Request", {"usagetype": "S3Files-Requests-PUT"}, _dim(0.000005, unit="Requests")),
+        _product("Storage", {"usagetype": "USE1-Files-TimedStorage-ByteHrs"}, _dim(0.30, unit="GB-Mo")),
+        _product(None, {"usagetype": "USE1-Files-Write"}, _dim(0.06, unit="GB")),
+        _product(None, {"usagetype": "USE1-Files-Read"}, _dim(0.03, unit="GB")),
     ])
     assert fetcher.fetch_s3files("us-east-1", db=tmp_db) == 3
-    assert _keys("AmazonS3Files", "us-east-1", tmp_db) == {
-        "s3files:cache": pytest.approx(0.30),
-        "s3files:requests:get": pytest.approx(0.0000004),
-        "s3files:requests:put": pytest.approx(0.000005),
+    assert _keys("AmazonS3", "us-east-1", tmp_db) == {
+        "s3files:storage": pytest.approx(0.30),
+        "s3files:write": pytest.approx(0.06),
+        "s3files:read": pytest.approx(0.03),
     }
+
+
+def test_fetch_s3files_ignores_unrelated_s3_line_items(fake_pricing, tmp_db):
+    """Plain S3 storage/request line items share the AmazonS3 service code
+    but must not collide with the Files-suffixed usagetypes."""
+    fake_pricing([
+        _product("Storage", {"usagetype": "TimedStorage-ByteHrs"}, _dim(0.023, unit="GB-Mo")),
+        _product("API Request", {"usagetype": "Requests-Tier1"}, _dim(0.000005, unit="Requests")),
+    ])
+    assert fetcher.fetch_s3files("us-east-1", db=tmp_db) == 0
+    assert _keys("AmazonS3", "us-east-1", tmp_db) == {}
 
 
 # ── OpenSearch ───────────────────────────────────────────────────────────────
@@ -1046,41 +1057,53 @@ def test_fetch_s3files_cache_and_requests(fake_pricing, tmp_db):
 
 def test_fetch_opensearch_instance_and_storage(fake_pricing, tmp_db):
     fake_pricing([
-        _product("Elastic Search Instance", {"instanceType": "r6g.large.elasticsearch"}, _dim(0.167)),
+        _product("Amazon OpenSearch Service Instance", {"instanceType": "r6g.large.search"}, _dim(0.167)),
         _product(
-            "Elastic Search Volume",
-            {"volumeType": "General Purpose", "usagetype": "ES:GP3-Storage"},
+            "Amazon OpenSearch Service Volume",
+            {"usagetype": "ES:GP3-Storage"},
             _dim(0.112, unit="GB-Mo"),
         ),
         _product(
-            "Elastic Search Volume",
-            {"volumeType": "General Purpose", "usagetype": "ES:EBS:VolumeUsage.gp2"},
+            "Amazon OpenSearch Service Volume",
+            {"usagetype": "ES:GP2-Storage"},
             _dim(0.135, unit="GB-Mo"),
         ),
     ])
     assert fetcher.fetch_opensearch("us-east-1", db=tmp_db) == 3
     assert _keys("AmazonES", "us-east-1", tmp_db) == {
-        "opensearch:r6g.large.elasticsearch": pytest.approx(0.167),
+        "opensearch:r6g.large.search": pytest.approx(0.167),
         "opensearch:storage:gp3": pytest.approx(0.112),
         "opensearch:storage:gp2": pytest.approx(0.135),
     }
 
 
-def test_fetch_opensearch_rejects_non_general_purpose_volumes(fake_pricing, tmp_db):
-    """Magnetic/PIOPS volume families share the "Elastic Search Volume" family
-    but aren't general-purpose EBS, so they must not collide with the gp2/gp3
-    keys."""
+def test_fetch_opensearch_io1_and_standard_storage(fake_pricing, tmp_db):
     fake_pricing([
-        _product("Elastic Search Instance", {"instanceType": "r6g.large.elasticsearch"}, _dim(0.167)),
-        _product(
-            "Elastic Search Volume",
-            {"volumeType": "Magnetic", "usagetype": "ES:EBS:VolumeUsage"},
-            _dim(0.05, unit="GB-Mo"),
-        ),
+        _product("Amazon OpenSearch Service Volume", {"usagetype": "ES:PIOPS-Storage"}, _dim(0.15, unit="GB-Mo")),
+        _product("Amazon OpenSearch Service Volume", {"usagetype": "ES:Magnetic-Storage"}, _dim(0.05, unit="GB-Mo")),
+    ])
+    assert fetcher.fetch_opensearch("us-east-1", db=tmp_db) == 2
+    assert _keys("AmazonES", "us-east-1", tmp_db) == {
+        "opensearch:storage:io1": pytest.approx(0.15),
+        "opensearch:storage:standard": pytest.approx(0.05),
+    }
+
+
+def test_fetch_opensearch_rejects_unrelated_volume_usagetypes(fake_pricing, tmp_db):
+    """GP3 IOPS/throughput add-ons, the bare PIOPS-hour rate, UltraWarm's
+    managed storage, and the vector-search add-on all share the "...Volume"
+    family but aren't `ebs_options` per-GB storage."""
+    fake_pricing([
+        _product("Amazon OpenSearch Service Instance", {"instanceType": "r6g.large.search"}, _dim(0.167)),
+        _product("Amazon OpenSearch Service Volume", {"usagetype": "ES:GP3-PIOPS"}, _dim(0.008)),
+        _product("Amazon OpenSearch Service Volume", {"usagetype": "ES:GP3-Provisioned-ThroughPut"}, _dim(0.04)),
+        _product("Amazon OpenSearch Service Volume", {"usagetype": "ES:PIOPS"}, _dim(0.10)),
+        _product("Amazon OpenSearch Service Volume", {"usagetype": "ES:Managed-Storage"}, _dim(0.024)),
+        _product("Amazon OpenSearch Service Volume", {"usagetype": "OpenSearch-Vectors-TimedStorage-ByteHrs"}, _dim(0.02)),
     ])
     assert fetcher.fetch_opensearch("us-east-1", db=tmp_db) == 1
     assert _keys("AmazonES", "us-east-1", tmp_db) == {
-        "opensearch:r6g.large.elasticsearch": pytest.approx(0.167),
+        "opensearch:r6g.large.search": pytest.approx(0.167),
     }
 
 
@@ -1134,14 +1157,52 @@ def test_fetch_backup_storage_and_restore(fake_pricing, tmp_db):
 
 def test_fetch_msk_broker_and_storage(fake_pricing, tmp_db):
     fake_pricing([
-        _product("Kafka Broker Instance", {"instanceType": "kafka.m5.large"}, _dim(0.21)),
-        _product("Kafka Broker Storage", {}, _dim(0.10, unit="GB-Mo")),
+        _product(
+            "Managed Streaming for Apache Kafka (MSK)",
+            {"usagetype": "USE1-Kafka.m5.large"},
+            _dim(0.21),
+        ),
+        _product(
+            "Managed Streaming for Apache Kafka (MSK)",
+            {"usagetype": "USE1-Kafka.Storage.GP2"},
+            _dim(0.10, unit="GB-Mo"),
+        ),
     ])
     assert fetcher.fetch_msk("us-east-1", db=tmp_db) == 2
     assert _keys("AmazonMSK", "us-east-1", tmp_db) == {
         "msk:kafka.m5.large": pytest.approx(0.21),
         "msk:storage": pytest.approx(0.10),
     }
+
+
+def test_fetch_msk_ignores_serverless_capacity_and_tiered_retrieval(fake_pricing, tmp_db):
+    """Serverless capacity units, tiered-storage retrieval, private
+    connectivity, and throughput all share MSK's single product family but
+    aren't standard broker instance-hours or plain EBS storage."""
+    fake_pricing([
+        _product(
+            "Managed Streaming for Apache Kafka (MSK)",
+            {"usagetype": "USE1-Kafka.mcu.general"},
+            _dim(0.0015),
+        ),
+        _product(
+            "Managed Streaming for Apache Kafka (MSK)",
+            {"usagetype": "USE1-Kafka.Storage.Tiered"},
+            _dim(0.01, unit="GB-Mo"),
+        ),
+        _product(
+            "Managed Streaming for Apache Kafka (MSK)",
+            {"usagetype": "USE1-Kafka.Throughput"},
+            _dim(0.0015),
+        ),
+        _product(
+            "Managed Streaming for Apache Kafka (MSK)",
+            {"usagetype": "USE1-Kafka.PrivateConnectivityHours"},
+            _dim(0.01),
+        ),
+    ])
+    assert fetcher.fetch_msk("us-east-1", db=tmp_db) == 0
+    assert _keys("AmazonMSK", "us-east-1", tmp_db) == {}
 
 
 # ── Elastic IP ───────────────────────────────────────────────────────────────
@@ -1158,6 +1219,17 @@ def test_fetch_eip_flat_rate(fake_pricing, tmp_db):
 def test_fetch_eip_ignores_unrelated_ip_address_line_items(fake_pricing, tmp_db):
     fake_pricing([
         _product("IP Address", {"usagetype": "SomeOtherIpCharge"}, _dim(1.23)),
+    ])
+    assert fetcher.fetch_eip("us-east-1", db=tmp_db) == 0
+    assert _keys("AmazonVPC", "us-east-1", tmp_db) == {}
+
+
+def test_fetch_eip_ignores_contiguous_block_and_idle_variants(fake_pricing, tmp_db):
+    """BYOIP pool pricing and the (now identically-priced) idle-address SKU
+    both contain the "PublicIPv4" substring but aren't the per-EIP rate."""
+    fake_pricing([
+        _product(None, {"usagetype": "PublicIPv4:ContiguousBlock"}, _dim(0.01)),
+        _product(None, {"usagetype": "PublicIPv4:IdleAddress"}, _dim(0.005)),
     ])
     assert fetcher.fetch_eip("us-east-1", db=tmp_db) == 0
     assert _keys("AmazonVPC", "us-east-1", tmp_db) == {}
@@ -1278,8 +1350,8 @@ def test_fetch_neptune_instance_price(fake_pricing, tmp_db):
 
 def test_fetch_global_accelerator_fixed_fee_and_data_premium(fake_pricing, tmp_db):
     fake_pricing([
-        _product("", {"usagetype": "FixedFee-Hourly"}, _dim(0.025)),
-        _product("", {"usagetype": "DataTransfer-Premium-Out"}, _dim(0.015, unit="GB")),
+        _product("AWS Global Accelerator", {"usagetype": "Global-Accelerator-fixed-fee"}, _dim(0.025)),
+        _product("AWS Global Accelerator", {"usagetype": "AU-AU-OUT-Bytes-AWS"}, _dim(0.015, unit="GB")),
     ])
     assert fetcher.fetch_global_accelerator("us-east-1", db=tmp_db) == 2
     assert _keys("AWSGlobalAccelerator", "us-east-1", tmp_db) == {
@@ -1338,8 +1410,8 @@ def test_fetch_direct_connect_by_port_speed(fake_pricing, tmp_db):
 
 def test_fetch_appsync_requests_and_connection_minutes(fake_pricing, tmp_db):
     fake_pricing([
-        _product("API Calls", {"usagetype": "RequestOps"}, _dim(4.0, unit="requests")),
-        _product("Realtime", {"usagetype": "ConnMins"}, _dim(0.00002, unit="minutes")),
+        _product("API Calls", {"usagetype": "GraphQLInvocation"}, _dim(4.0, unit="requests")),
+        _product("RealTime", {"usagetype": "ConnectionDuration"}, _dim(0.00002, unit="minutes")),
     ])
     assert fetcher.fetch_appsync("us-east-1", db=tmp_db) == 2
     assert _keys("AWSAppSync", "us-east-1", tmp_db) == {
@@ -1348,14 +1420,32 @@ def test_fetch_appsync_requests_and_connection_minutes(fake_pricing, tmp_db):
     }
 
 
+def test_fetch_appsync_ignores_event_api_connection_duration(fake_pricing, tmp_db):
+    """A distinct newer API type (`EventAPI-ConnectionDuration`) shares the
+    "ConnectionDuration" suffix but isn't the GraphQL API's own rate."""
+    fake_pricing([
+        _product("RealTime", {"usagetype": "EventAPI-ConnectionDuration"}, _dim(0.00002, unit="minutes")),
+    ])
+    assert fetcher.fetch_appsync("us-east-1", db=tmp_db) == 0
+
+
 def test_fetch_cognito_mau_tier(fake_pricing, tmp_db):
     fake_pricing([
-        _product("Cognito", {"usagetype": "CognitoUserPool-MAU"}, _dim(0.0055, unit="users")),
+        _product("User Pool MAU", {"usagetype": "CognitoUserPoolsMAU"}, _dim(0.0055, unit="users")),
     ])
     assert fetcher.fetch_cognito("us-east-1", db=tmp_db) == 1
-    assert _keys("AmazonCognitoSync", "us-east-1", tmp_db) == {
+    assert _keys("AmazonCognito", "us-east-1", tmp_db) == {
         "cognito:mau": pytest.approx(0.0055),
     }
+
+
+def test_fetch_cognito_ignores_other_feature_plan_mau(fake_pricing, tmp_db):
+    """Lite/Essentials/Plus/Enterprise each have their own MAU usagetype;
+    only the plain default-plan rate is fetched."""
+    fake_pricing([
+        _product("Amazon Cognito - Plus", {"usagetype": "CognitoPlusMAU"}, _dim(0.015, unit="users")),
+    ])
+    assert fetcher.fetch_cognito("us-east-1", db=tmp_db) == 0
 
 
 def test_fetch_glue_dpuhour(fake_pricing, tmp_db):
@@ -1380,15 +1470,24 @@ def test_fetch_sagemaker_by_instance_type(fake_pricing, tmp_db):
 
 def test_fetch_cloudhsm_flat_hourly(fake_pricing, tmp_db):
     fake_pricing([
-        _product("Hardware Security Module", {}, _dim(1.60)),
+        _product("Dedicated-Host", {"usagetype": "CloudHSMv2Usage"}, _dim(1.60)),
     ])
     assert fetcher.fetch_cloudhsm("us-east-1", db=tmp_db) == 1
-    assert _keys("AWSCloudHSM", "us-east-1", tmp_db) == {"cloudhsm:hourly": pytest.approx(1.60)}
+    assert _keys("CloudHSM", "us-east-1", tmp_db) == {"cloudhsm:hourly": pytest.approx(1.60)}
+
+
+def test_fetch_cloudhsm_ignores_hardware_variant_and_upfront(fake_pricing, tmp_db):
+    fake_pricing([
+        _product("Dedicated-Host", {"usagetype": "CloudHSMv2Usage-hsm2m.m"}, _dim(2.20)),
+        _product("Dedicated-Host", {"usagetype": "CloudHSMv2Upfront"}, _dim(0.0)),
+    ])
+    assert fetcher.fetch_cloudhsm("us-east-1", db=tmp_db) == 0
+    assert _keys("CloudHSM", "us-east-1", tmp_db) == {}
 
 
 def test_fetch_macie_per_gb(fake_pricing, tmp_db):
     fake_pricing([
-        _product("Macie", {"usagetype": "DataInspected-Bytes"}, _dim(1.00, unit="GB")),
+        _product("Amazon Macie", {"usagetype": "S3ContentClassification"}, _dim(1.00, unit="GB")),
     ])
     assert fetcher.fetch_macie("us-east-1", db=tmp_db) == 1
     assert _keys("AmazonMacie", "us-east-1", tmp_db) == {"macie:gb": pytest.approx(1.00)}
@@ -1488,7 +1587,7 @@ def test_fetch_data_transfer_stores_all_outbound_tiers(fake_pricing, tmp_db):
         ]),
     ])
     assert fetcher.fetch_data_transfer("us-east-1", db=tmp_db) == 4
-    assert _keys("AmazonEC2", "us-east-1", tmp_db) == {
+    assert _keys("AWSDataTransfer", "us-east-1", tmp_db) == {
         "datatransfer:out:0": pytest.approx(0.09),
         "datatransfer:out:10240": pytest.approx(0.085),
         "datatransfer:out:51200": pytest.approx(0.07),
@@ -1501,7 +1600,7 @@ def test_fetch_data_transfer_stores_flat_inter_az_rate(fake_pricing, tmp_db):
         _product("Data Transfer", {"transferType": "IntraRegion"}, _dim(0.01, unit="GB")),
     ])
     assert fetcher.fetch_data_transfer("us-east-1", db=tmp_db) == 1
-    assert _keys("AmazonEC2", "us-east-1", tmp_db) == {
+    assert _keys("AWSDataTransfer", "us-east-1", tmp_db) == {
         "datatransfer:regional": pytest.approx(0.01),
     }
 

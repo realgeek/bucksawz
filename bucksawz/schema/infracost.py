@@ -50,6 +50,7 @@ class Resource:
     sub_resources: list["Resource"]
     is_supported: bool = True
     no_price: bool = False
+    no_price_reason: Optional[str] = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Resource":
@@ -65,6 +66,7 @@ class Resource:
             sub_resources=[Resource.from_dict(r) for r in d.get("subresources") or []],
             is_supported=d.get("isSupported", True),
             no_price=d.get("noPrice", False),
+            no_price_reason=d.get("noPriceReason"),
         )
 
     def total_monthly_cost(self) -> float:

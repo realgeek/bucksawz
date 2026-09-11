@@ -6,6 +6,7 @@ Older services filter by `location` display name; newer ones accept `regionCode`
 """
 from __future__ import annotations
 import json
+import re
 from typing import Iterator, Optional
 from pathlib import Path
 import boto3
@@ -754,22 +755,28 @@ def fetch_data_transfer(
     depends on a (from, to) region pair Terraform config can't express, and
     shares this same "Data Transfer" product family.
 
-    Service code: AmazonEC2, product family: Data Transfer.
+    Service code: AWSDataTransfer (not AmazonEC2 — data transfer moved to
+    its own service code; confirmed against a live `get_products` response,
+    see below), product family: Data Transfer. This service's SKUs carry
+    `fromRegionCode`/`toRegionCode` attributes instead of a plain
+    `regionCode`, so the region filter has to target `fromRegionCode` or
+    every row is filtered out.
+
     Returns count of rows stored.
     """
     pricing = _pricing_client(profile)
     filters = [
-        {"Type": "TERM_MATCH", "Field": "regionCode", "Value": region},
+        {"Type": "TERM_MATCH", "Field": "fromRegionCode", "Value": region},
         {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "Data Transfer"},
     ]
     stored = 0
-    for product in _iter_products(pricing, "AmazonEC2", filters):
+    for product in _iter_products(pricing, "AWSDataTransfer", filters):
         attrs = product.get("product", {}).get("attributes", {})
         transfer_type = attrs.get("transferType", "")
         if transfer_type == "AWS Outbound":
             for begin_gb, unit, price, desc in _all_tier_prices(product):
                 price_db.upsert(
-                    "AmazonEC2", region, f"datatransfer:out:{begin_gb}", unit, price, desc, db=db,
+                    "AWSDataTransfer", region, f"datatransfer:out:{begin_gb}", unit, price, desc, db=db,
                 )
                 stored += 1
         elif transfer_type == "IntraRegion":
@@ -777,7 +784,7 @@ def fetch_data_transfer(
             if result is None:
                 continue
             unit, price, desc = result
-            price_db.upsert("AmazonEC2", region, "datatransfer:regional", unit, price, desc, db=db)
+            price_db.upsert("AWSDataTransfer", region, "datatransfer:regional", unit, price, desc, db=db)
             stored += 1
     return stored
 
@@ -1099,13 +1106,15 @@ def fetch_ecr(
     standard EC2 data-transfer rates already covered by `fetch_data_transfer`,
     not a separate ECR line item.
 
-    Service code: AmazonECR, product family: Storage. Returns count of rows
+    Service code: AmazonECR, product family: "EC2 Container Registry" (not
+    "Storage" — confirmed against a live `get_products` response; ECR has
+    no product family literally named "Storage"). Returns count of rows
     stored (0 or 1).
     """
     pricing = _pricing_client(profile)
     filters = [
         {"Type": "TERM_MATCH", "Field": "regionCode", "Value": region},
-        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "Storage"},
+        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "EC2 Container Registry"},
     ]
     stored = 0
     for product in _iter_products(pricing, "AmazonECR", filters):
@@ -1282,27 +1291,25 @@ def fetch_stepfunctions(
     of transitions/requests/duration a state machine will see isn't in its
     Terraform config, only its `type` ("STANDARD" or "EXPRESS").
 
-    NOTE: written without live Pricing API access (no AWS credentials in the
-    dev sandbox) — the usagetype substrings below are inferred from AWS's
-    public Step Functions pricing page structure, not verified against a
-    real `get_products` response. Run `bucksawz prices update --services
-    StepFunctions` and sanity-check `bucksawz prices info` against the
-    console's advertised rates before trusting this, and fix the substrings
-    here if they don't match.
+    Service code: AmazonStates (not "AWSStepFunctions" — that code doesn't
+    exist; the Pricing API kept the pre-rebrand internal name). usagetype
+    substrings confirmed against a live `get_products` response:
+    "StateTransition" (Standard), "StepFunctions-Request" (Express
+    requests), "StepFunctions-GB-Second" (Express duration).
 
-    Service code: AWSStepFunctions. Returns count of rows stored.
+    Returns count of rows stored.
     """
     pricing = _pricing_client(profile)
     filters = [{"Type": "TERM_MATCH", "Field": "regionCode", "Value": region}]
     stored = 0
-    for product in _iter_products(pricing, "AWSStepFunctions", filters):
+    for product in _iter_products(pricing, "AmazonStates", filters):
         attrs = product.get("product", {}).get("attributes", {})
         usagetype = attrs.get("usagetype", "")
         if "StateTransition" in usagetype:
             key = "sfn:standard:transitions"
-        elif "ExpressWorkflowsRequest" in usagetype:
+        elif "StepFunctions-Request" in usagetype:
             key = "sfn:express:requests"
-        elif "ExpressWorkflowsDuration" in usagetype:
+        elif "StepFunctions-GB-Second" in usagetype:
             key = "sfn:express:duration"
         else:
             continue
@@ -1310,7 +1317,7 @@ def fetch_stepfunctions(
         if result is None:
             continue
         unit, price, desc = result
-        price_db.upsert("AWSStepFunctions", region, key, unit, price, desc, db=db)
+        price_db.upsert("AmazonStates", region, key, unit, price, desc, db=db)
         stored += 1
     return stored
 
@@ -1325,20 +1332,14 @@ def fetch_eventbridge(
     `aws_cloudwatch_event_bus` custom bus can incur) are priced, and the
     volume isn't derivable from the bus's own config.
 
-    NOTE: written without live Pricing API access (no AWS credentials in the
-    dev sandbox) — the service code/usagetype below are inferred from AWS's
-    public EventBridge pricing page structure, not verified against a real
-    `get_products` response. Run `bucksawz prices update --services
-    EventBridge` and sanity-check `bucksawz prices info` against the
-    console's advertised rates before trusting this, and fix the filters
-    here if they don't match.
-
-    Service code: AmazonEventBridge. Returns count of rows stored.
+    Service code: AWSEvents (not "AmazonEventBridge" — the Pricing API kept
+    the pre-rebrand "CloudWatch Events" internal service code; confirmed
+    against a live `get_products` response). Returns count of rows stored.
     """
     pricing = _pricing_client(profile)
     filters = [{"Type": "TERM_MATCH", "Field": "regionCode", "Value": region}]
     stored = 0
-    for product in _iter_products(pricing, "AmazonEventBridge", filters):
+    for product in _iter_products(pricing, "AWSEvents", filters):
         attrs = product.get("product", {}).get("attributes", {})
         usagetype = attrs.get("usagetype", "")
         if "PutEvents" not in usagetype and "Event-64K-Chunks" not in usagetype:
@@ -1347,7 +1348,7 @@ def fetch_eventbridge(
         if result is None:
             continue
         unit, price, desc = result
-        price_db.upsert("AmazonEventBridge", region, "eventbridge:events", unit, price, desc, db=db)
+        price_db.upsert("AWSEvents", region, "eventbridge:events", unit, price, desc, db=db)
         stored += 1
     return stored
 
@@ -1360,14 +1361,16 @@ def fetch_transit_gateway(
     `region`. Same hourly-plus-usage shape as NAT Gateway/VPC Interface
     Endpoints.
 
-    Service code: AmazonVPC, product family: Transit Gateway. usagetype
-    suffixes are "TransitGateway-Hours" and "TransitGateway-Bytes". Returns
-    count of rows stored.
+    Service code: AmazonVPC. There's no dedicated "Transit Gateway" product
+    family (confirmed against a live `get_products` response — these SKUs
+    carry no productFamily at all), so unlike most other fetchers this one
+    can't filter on family and instead relies entirely on the usagetype
+    suffix. usagetype suffixes are "TransitGateway-Hours" and
+    "TransitGateway-Bytes". Returns count of rows stored.
     """
     pricing = _pricing_client(profile)
     filters = [
         {"Type": "TERM_MATCH", "Field": "regionCode", "Value": region},
-        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "Transit Gateway"},
     ]
     stored = 0
     for product in _iter_products(pricing, "AmazonVPC", filters):
@@ -1392,49 +1395,53 @@ def fetch_s3files(
     region: str, profile: Optional[str] = None, db: Optional[Path] = None
 ) -> int:
     """
-    S3 Files cache-storage and cache-request prices for `region`. S3 Files
-    (`aws_s3files_file_system`) is a POSIX file system mounted directly onto
-    an existing S3 bucket: the underlying object data is billed at the
-    bucket's ordinary S3 storage rate (already covered by `fetch_s3` /
-    `s3:storage:standard` — not duplicated here), and S3 Files' own
-    incremental cost is a per-GB cache-storage rate (only actively-accessed
-    data is cached, not the whole bucket) plus per-request GET/PUT charges
-    on that cache. Mount targets and access points
-    (`aws_s3files_mount_target`, `aws_s3files_access_point`) carry no
-    charge at all — see `_price_s3files_mount_target`/`_access_point`.
+    S3 Files high-performance-storage, write, and read rates for `region`.
+    S3 Files layers a POSIX file interface over an existing S3 bucket: a
+    tunable window of recently-written/read data (default 30 days, 1-365
+    configurable) is held on faster storage, billed per GB-month, plus
+    per-GB charges for data moving onto and off of that fast tier — see
+    https://aws.amazon.com/s3/pricing/ ("Files" tab). Reads/writes above a
+    1 MiB threshold bypass the fast tier and bill as ordinary S3 GET/PUT
+    requests instead (already covered by `fetch_s3`, not duplicated here).
+    Mount targets and access points carry no charge of their own — see
+    `_price_s3files_free_resource`.
 
-    NOTE: S3 Files launched after this fetcher's knowledge cutoff and there
-    was no live Pricing API access to verify it (no AWS credentials in the
-    dev sandbox) — the service code (`AmazonS3Files`), product families, and
-    usagetype substrings below are a best-effort guess following this
-    codebase's naming conventions for sibling services (AmazonEFS,
-    AmazonECR), not confirmed against a real `get_products` response. Run
-    `bucksawz prices update --services S3Files` and check `bucksawz prices
-    info` against the console's advertised rates (~$0.30/GB-mo cache
-    storage was the only number available while writing this) before
-    trusting it, and fix the service code/filters here if they don't match.
+    There is no dedicated "S3Files" service code — confirmed against the
+    live offer index, no such code exists — this is billed as a distinct
+    storage class (`storageClass` "Files") and pair of un-classed
+    request-family SKUs under the plain `AmazonS3` service code itself,
+    with `usagetype` suffixes `Files-TimedStorage-ByteHrs` (storage,
+    GB-Mo), `Files-Write`, and `Files-Read` (both per-GB, not per-request —
+    unlike ordinary S3 API requests, S3 Files' fast-tier charges scale with
+    data volume moved, not request count).
+
+    Registered under the `S3Files` fetcher name for `prices update
+    --services`, but stored in the price cache under service `AmazonS3`
+    (the real owning service) alongside `fetch_s3`'s rows, in the same
+    aws-service-umbrella-not-fetcher-name pattern `fetch_eip`/
+    `fetch_transit_gateway`/etc. use for `AmazonVPC`.
 
     Returns count of rows stored.
     """
     pricing = _pricing_client(profile)
     filters = [{"Type": "TERM_MATCH", "Field": "regionCode", "Value": region}]
     stored = 0
-    for product in _iter_products(pricing, "AmazonS3Files", filters):
+    for product in _iter_products(pricing, "AmazonS3", filters):
         attrs = product.get("product", {}).get("attributes", {})
         usagetype = attrs.get("usagetype", "")
-        if "Cache-Storage" in usagetype or "CacheStorage" in usagetype:
-            key = "s3files:cache"
-        elif "Requests-GET" in usagetype or "Get-Requests" in usagetype:
-            key = "s3files:requests:get"
-        elif "Requests-PUT" in usagetype or "Put-Requests" in usagetype:
-            key = "s3files:requests:put"
+        if usagetype.endswith("Files-TimedStorage-ByteHrs"):
+            key = "s3files:storage"
+        elif usagetype.endswith("Files-Write"):
+            key = "s3files:write"
+        elif usagetype.endswith("Files-Read"):
+            key = "s3files:read"
         else:
             continue
         result = _ondemand_price(product)
         if result is None:
             continue
         unit, price, desc = result
-        price_db.upsert("AmazonS3Files", region, key, unit, price, desc, db=db)
+        price_db.upsert("AmazonS3", region, key, unit, price, desc, db=db)
         stored += 1
     return stored
 
@@ -1444,18 +1451,25 @@ def fetch_opensearch(
 ) -> int:
     """
     OpenSearch/Elasticsearch Service on-demand data-node instance-hour
-    prices, and gp2/gp3 EBS storage rates, for `region`. Dedicated master
-    and UltraWarm/cold-storage nodes aren't fetched (see
+    prices, and gp2/gp3/io1/magnetic EBS storage rates, for `region`.
+    Dedicated master and UltraWarm/cold-storage nodes aren't fetched (see
     `_price_opensearch_domain`'s docstring for the resulting limitation).
 
-    NOTE: written without live Pricing API access (no AWS credentials in
-    the dev sandbox) — the product family names below ("Elastic Search
-    Instance", "Elastic Search Volume") are inferred from AWS's public
-    OpenSearch Service pricing page structure, not verified against a real
-    `get_products` response. Run `bucksawz prices update --services
-    OpenSearch` and sanity-check `bucksawz prices info` against the
-    console's advertised rates before trusting this, and fix the family
-    names/filters here if they don't match.
+    Product family names (confirmed against a live `get_products` response)
+    are "Amazon OpenSearch Service Instance" and "...Volume" — the older
+    "Elastic Search Instance"/"...Volume" names a previous, unverified
+    version of this fetcher assumed don't exist. `instanceType` attribute
+    values already carry the ".search" suffix Terraform's
+    `cluster_config.instance_type` uses (e.g. "m5.large.search"), so no
+    transformation is needed there. Storage has no `volumeType` attribute
+    at all — classification instead comes from the exact `usagetype`
+    suffix (`ES:GP2-Storage`/`ES:GP3-Storage`/`ES:PIOPS-Storage`/
+    `ES:Magnetic-Storage`, matching Terraform's `ebs_options.volume_type`
+    values gp2/gp3/io1/standard), which also excludes the GP3
+    IOPS/throughput add-on rates (`ES:GP3-PIOPS`,
+    `ES:GP3-Provisioned-ThroughPut`), the bare PIOPS-hour rate (`ES:PIOPS`),
+    UltraWarm's `ES:Managed-Storage`, and the vector-search add-on
+    (`OpenSearch-Vectors-*`) — none of which are `ebs_options` storage.
 
     Service code: AmazonES (unchanged from the Elasticsearch-era service
     code even for OpenSearch domains). Returns count of rows stored.
@@ -1463,22 +1477,29 @@ def fetch_opensearch(
     pricing = _pricing_client(profile)
     filters = [{"Type": "TERM_MATCH", "Field": "regionCode", "Value": region}]
     stored = 0
+    storage_suffixes = {
+        "ES:GP2-Storage": "gp2",
+        "ES:GP3-Storage": "gp3",
+        "ES:PIOPS-Storage": "io1",
+        "ES:Magnetic-Storage": "standard",
+    }
     for product in _iter_products(pricing, "AmazonES", filters):
         attrs = product.get("product", {}).get("attributes", {})
         family = product.get("product", {}).get("productFamily", "")
-        if family == "Elastic Search Instance":
+        usagetype = attrs.get("usagetype", "")
+        if family == "Amazon OpenSearch Service Instance":
             instance_type = attrs.get("instanceType", "")
             if not instance_type:
                 continue
             key = f"opensearch:{instance_type}"
-        elif family == "Elastic Search Volume":
-            volume_type = (attrs.get("volumeType") or "").lower()
-            if "general purpose" in volume_type and "gp3" in attrs.get("usagetype", "").lower():
-                key = "opensearch:storage:gp3"
-            elif "general purpose" in volume_type:
-                key = "opensearch:storage:gp2"
-            else:
+        elif family == "Amazon OpenSearch Service Volume":
+            volume_type = next(
+                (v for suffix, v in storage_suffixes.items() if usagetype.endswith(suffix)),
+                None,
+            )
+            if volume_type is None:
                 continue
+            key = f"opensearch:storage:{volume_type}"
         else:
             continue
         result = _ondemand_price(product)
@@ -1569,23 +1590,35 @@ def fetch_backup(
     return stored
 
 
+_MSK_INSTANCE_RE = re.compile(
+    r"Kafka\.([a-z][0-9][a-z]*\.(?:\d*x?large|medium|small|nano|micro))$"
+)
+
+
 def fetch_msk(
     region: str, profile: Optional[str] = None, db: Optional[Path] = None
 ) -> int:
     """
     MSK (Managed Streaming for Kafka) broker instance-hour and EBS
-    broker-storage per-GB rates for `region`. MSK Serverless (a separate,
-    RPU-hour-and-partition billing model, not `aws_msk_cluster`) isn't
-    fetched.
+    broker-storage per-GB rates for `region`. MSK Serverless and MSK
+    Express brokers (separate billing dimensions, not `aws_msk_cluster`'s
+    standard broker nodes) aren't fetched.
 
-    NOTE: written without live Pricing API access (no AWS credentials in
-    the dev sandbox) — the product family names below ("Kafka Broker
-    Instance", "Kafka Broker Storage") are inferred from AWS's public MSK
-    pricing page structure, not verified against a real `get_products`
-    response. Run `bucksawz prices update --services MSK` and sanity-check
-    `bucksawz prices info` against the console's advertised rates before
-    trusting this, and fix the family names/filters here if they don't
-    match.
+    Everything — standard brokers, Express brokers, storage, serverless,
+    replication, tiered-storage retrieval — shares one single product
+    family ("Managed Streaming for Apache Kafka (MSK)"), and there's no
+    `instanceType` attribute at all: instance type is embedded in the
+    usagetype string itself (e.g. `Kafka.m5.xlarge`, region-prefixed as
+    `USE1-Kafka.m5.xlarge` outside us-east-1). `_MSK_INSTANCE_RE` extracts
+    it, matching only the `Kafka.<family>.<size>` shape so it doesn't
+    false-positive on `Kafka.Storage.GP2`/`Kafka.Throughput`/
+    `Kafka.mcu.general` (serverless capacity units)/`Kafka.DataRetrieval.*`/
+    `Kafka.PrivateConnectivity*` or the `Express.*`/`KafkaServerless-*`/
+    `KafkaReplication-*` families, none of which have a two-part
+    family.size suffix. Storage is matched on the `Kafka.Storage.GP2`
+    usagetype specifically (excluding `Kafka.Storage.Tiered`, a separate
+    tiered-storage rate `aws_msk_cluster`'s plain `volume_size` doesn't
+    use).
 
     Service code: AmazonMSK. Returns count of rows stored.
     """
@@ -1594,13 +1627,11 @@ def fetch_msk(
     stored = 0
     for product in _iter_products(pricing, "AmazonMSK", filters):
         attrs = product.get("product", {}).get("attributes", {})
-        family = product.get("product", {}).get("productFamily", "")
-        if family == "Kafka Broker Instance":
-            instance_type = attrs.get("instanceType", "")
-            if not instance_type:
-                continue
-            key = f"msk:{instance_type}"
-        elif family == "Kafka Broker Storage":
+        usagetype = attrs.get("usagetype", "")
+        match = _MSK_INSTANCE_RE.search(usagetype)
+        if match:
+            key = f"msk:kafka.{match.group(1)}"
+        elif usagetype.endswith("Kafka.Storage.GP2"):
             key = "msk:storage"
         else:
             continue
@@ -1625,27 +1656,28 @@ def fetch_eip(
     applies, so in-use and idle line items are collapsed into a single
     flat key here rather than kept separate.
 
-    NOTE: written without live Pricing API access (no AWS credentials in
-    the dev sandbox) — the "PublicIPv4"/"ElasticIP" usagetype substrings
-    below are inferred from AWS's public pricing announcement, not
-    verified against a real `get_products` response. Run `bucksawz prices
-    update --services EIP` and sanity-check `bucksawz prices info` against
-    the console's advertised $0.005/hr rate before trusting this, and fix
-    the substrings here if they don't match.
+    Service code: AmazonVPC. There's no "IP Address" product family
+    (confirmed against a live `get_products` response — these SKUs carry
+    no productFamily at all), so this can't filter on family and instead
+    matches the usagetype suffix directly: "PublicIPv4:InUseAddress" is
+    the flat per-address rate; "PublicIPv4:IdleAddress" is priced
+    identically post-Feb-2024 but excluded here in favor of the InUse
+    variant to avoid double-counting the same flat rate twice, and
+    "PublicIPv4:ContiguousBlock" (BYOIP pool pricing, unrelated to a
+    single EIP) is deliberately excluded even though it also contains the
+    "PublicIPv4" substring.
 
-    Service code: AmazonVPC, product family: IP Address. Returns count of
-    rows stored (this fetcher stores at most 1 — the first matching flat
-    rate it finds).
+    Returns count of rows stored (this fetcher stores at most 1 — the
+    first matching flat rate it finds).
     """
     pricing = _pricing_client(profile)
     filters = [
         {"Type": "TERM_MATCH", "Field": "regionCode", "Value": region},
-        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "IP Address"},
     ]
     for product in _iter_products(pricing, "AmazonVPC", filters):
         attrs = product.get("product", {}).get("attributes", {})
         usagetype = attrs.get("usagetype", "")
-        if "PublicIPv4" not in usagetype and "ElasticIP" not in usagetype:
+        if "PublicIPv4:InUseAddress" not in usagetype:
             continue
         result = _ondemand_price(product)
         if result is None:
@@ -1885,13 +1917,14 @@ def fetch_athena(
     but doesn't set it, and most workgroups don't even set a cutoff. See
     `_price_athena_workgroup`.
 
-    Service code: AmazonAthena, product family: Amazon Athena. Returns
-    count of rows stored.
+    Service code: AmazonAthena, product family: "Athena Queries" (not
+    "Amazon Athena" — confirmed against a live `get_products` response).
+    Returns count of rows stored.
     """
     pricing = _pricing_client(profile)
     filters = [
         {"Type": "TERM_MATCH", "Field": "regionCode", "Value": region},
-        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "Amazon Athena"},
+        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "Athena Queries"},
     ]
     for product in _iter_products(pricing, "AmazonAthena", filters):
         result = _ondemand_price(product)
@@ -1993,14 +2026,13 @@ def fetch_global_accelerator(
     resource can't express, so only a flat representative rate is stored,
     same simplification as WAF's capacity-unit tiers.
 
-    NOTE: written without live Pricing API access (no AWS credentials in
-    the dev sandbox) — the usagetype substrings below are inferred from
-    AWS's public Global Accelerator pricing page, not verified against a
-    real `get_products` response. Run `bucksawz prices update --services
-    GlobalAccelerator` and sanity-check `bucksawz prices info` against the
-    console's advertised $0.025/hr fixed fee before trusting this.
-
-    Service code: AWSGlobalAccelerator. Returns count of rows stored.
+    Service code: AWSGlobalAccelerator. Confirmed against a live
+    `get_products` response: the fixed fee's usagetype is the literal
+    "Global-Accelerator-fixed-fee" (not "FixedFee"/"Hourly"), and every
+    data-transfer-premium SKU is named by its region-pair-and-direction,
+    e.g. "AU-AU-OUT-Bytes-AWS" (not "DataTransfer"/"Premium") — so the
+    only reliable way to recognize the latter is the "-Bytes-" marker
+    shared by all of them. Returns count of rows stored.
     """
     pricing = _pricing_client(profile)
     filters: list[dict] = []
@@ -2008,9 +2040,9 @@ def fetch_global_accelerator(
     for product in _iter_products(pricing, "AWSGlobalAccelerator", filters):
         attrs = product.get("product", {}).get("attributes", {})
         usagetype = attrs.get("usagetype", "")
-        if "FixedFee" in usagetype or "Hourly" in usagetype:
+        if "fixed-fee" in usagetype.lower():
             key = "globalaccelerator:hourly"
-        elif "DataTransfer" in usagetype or "Premium" in usagetype:
+        elif "-Bytes-" in usagetype:
             key = "globalaccelerator:data"
         else:
             continue
@@ -2115,19 +2147,16 @@ def fetch_direct_connect(
     port speed (e.g. "1Gbps", "10Gbps"). Data transfer out over the
     connection is usage-based and isn't fetched here.
 
-    NOTE: written without live Pricing API access (no AWS credentials in
-    the dev sandbox) — the attribute names below (`portSpeed`) are
-    inferred from AWS's public Direct Connect pricing page, not verified
-    against a real `get_products` response. Run `bucksawz prices update
-    --services DirectConnect` and sanity-check `bucksawz prices info`
-    before trusting this.
+    Product family is "Direct Connect" (not "Direct Connect Port" — that
+    family doesn't exist; confirmed against a live `get_products`
+    response). The `portSpeed` attribute name itself is correct.
 
     Returns count of rows stored.
     """
     pricing = _pricing_client(profile)
     filters = [
         {"Type": "TERM_MATCH", "Field": "regionCode", "Value": region},
-        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "Direct Connect Port"},
+        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "Direct Connect"},
     ]
     stored = 0
     for product in _iter_products(pricing, "AWSDirectConnect", filters):
@@ -2153,11 +2182,13 @@ def fetch_appsync(
     connection-minute rates for `region`. Fully usage-based — request and
     connection volume aren't derivable from the API's own config.
 
-    NOTE: written without live Pricing API access (no AWS credentials in
-    the dev sandbox) — the usagetype substrings below are inferred from
-    AWS's public AppSync pricing page, not verified against a real
-    `get_products` response. Run `bucksawz prices update --services
-    AppSync` and sanity-check `bucksawz prices info` before trusting this.
+    Confirmed against a live `get_products` response: the real usagetype
+    substrings are "GraphQLInvocation" (query/mutation requests — not
+    "RequestOps"), "ConnectionDuration" (connection minutes — not
+    "ConnMins"; the "EventAPI-ConnectionDuration" variant for the newer
+    Event API product is excluded here since it's a distinct API type not
+    modeled by `aws_appsync_graphql_api`), and "GraphQLNotification"
+    (subscription messages — not "MsgOps").
 
     Returns count of rows stored.
     """
@@ -2167,11 +2198,11 @@ def fetch_appsync(
     for product in _iter_products(pricing, "AWSAppSync", filters):
         attrs = product.get("product", {}).get("attributes", {})
         usagetype = attrs.get("usagetype", "")
-        if "RequestOps" in usagetype or "Request-Ops" in usagetype:
+        if "GraphQLInvocation" in usagetype:
             key = "appsync:requests"
-        elif "ConnMins" in usagetype or "Connection-Mins" in usagetype:
+        elif usagetype.endswith("ConnectionDuration") and "EventAPI" not in usagetype:
             key = "appsync:connectionminutes"
-        elif "MsgOps" in usagetype or "Message-Ops" in usagetype:
+        elif "GraphQLNotification" in usagetype:
             key = "appsync:messages"
         else:
             continue
@@ -2195,27 +2226,29 @@ def fetch_cognito(
     features are enabled, neither of which is resolvable from a single
     Terraform plan.
 
-    NOTE: written without live Pricing API access (no AWS credentials in
-    the dev sandbox) — the usagetype substring below is inferred from
-    AWS's public Cognito pricing page, not verified against a real
-    `get_products` response. Run `bucksawz prices update --services
-    Cognito` and sanity-check `bucksawz prices info` before trusting this.
+    Service code: AmazonCognito (not "AmazonCognitoSync" — that's a
+    separate, distinct, deprecated Cognito Sync product; confirmed against
+    the Pricing API's live offer index, which lists both as independent
+    codes). Cognito now has several MAU pricing plans (Lite/Essentials/
+    Plus/Enterprise, each with its own usagetype like "CognitoPlusMAU");
+    this fetcher targets only the plain "CognitoUserPoolsMAU" rate, i.e.
+    the default plan a pool is on before opting into a named feature plan.
 
     Returns count of rows stored.
     """
     pricing = _pricing_client(profile)
     filters = [{"Type": "TERM_MATCH", "Field": "regionCode", "Value": region}]
     stored = 0
-    for product in _iter_products(pricing, "AmazonCognitoSync", filters):
+    for product in _iter_products(pricing, "AmazonCognito", filters):
         attrs = product.get("product", {}).get("attributes", {})
         usagetype = attrs.get("usagetype", "")
-        if "MAU" not in usagetype:
+        if not usagetype.endswith("CognitoUserPoolsMAU"):
             continue
         result = _first_tier_price(product)
         if result is None:
             continue
         unit, price, desc = result
-        price_db.upsert("AmazonCognitoSync", region, "cognito:mau", unit, price, desc, db=db)
+        price_db.upsert("AmazonCognito", region, "cognito:mau", unit, price, desc, db=db)
         stored += 1
     return stored
 
@@ -2304,24 +2337,32 @@ def fetch_cloudhsm(
     (`aws_cloudhsm_v2_hsm`); the cluster resource itself carries no
     charge of its own.
 
-    NOTE: written without live Pricing API access (no AWS credentials in
-    the dev sandbox) — the productFamily below is inferred from AWS's
-    public CloudHSM pricing page, not verified against a real
-    `get_products` response. Run `bucksawz prices update --services
-    CloudHSM` and sanity-check `bucksawz prices info` before trusting
-    this.
+    Service code: CloudHSM (not "AWSCloudHSM" — that code doesn't exist;
+    confirmed against the Pricing API's live offer index). Without a
+    usagetype filter this service also returns Upfront/Trial/legacy-v1
+    variants under the same "Dedicated-Host" family, so this targets the
+    exact "CloudHSMv2Usage" usagetype (the current-generation hourly
+    on-demand rate, e.g. hsm1.medium) and excludes the "-hsm2m.m" hardware
+    variant, Upfront commitments, and free-trial usage.
 
     Returns count of rows stored.
     """
     pricing = _pricing_client(profile)
-    filters = [{"Type": "TERM_MATCH", "Field": "regionCode", "Value": region}]
+    filters = [
+        {"Type": "TERM_MATCH", "Field": "regionCode", "Value": region},
+        {"Type": "TERM_MATCH", "Field": "productFamily", "Value": "Dedicated-Host"},
+    ]
     stored = 0
-    for product in _iter_products(pricing, "AWSCloudHSM", filters):
+    for product in _iter_products(pricing, "CloudHSM", filters):
+        attrs = product.get("product", {}).get("attributes", {})
+        usagetype = attrs.get("usagetype", "")
+        if not usagetype.endswith("CloudHSMv2Usage"):
+            continue
         result = _ondemand_price(product)
         if result is None:
             continue
         unit, price, desc = result
-        price_db.upsert("AWSCloudHSM", region, "cloudhsm:hourly", unit, price, desc, db=db)
+        price_db.upsert("CloudHSM", region, "cloudhsm:hourly", unit, price, desc, db=db)
         stored += 1
     return stored
 
@@ -2336,11 +2377,10 @@ def fetch_macie(
     tiered by cumulative GB processed per month, which isn't resolvable
     from a single Terraform plan.
 
-    NOTE: written without live Pricing API access (no AWS credentials in
-    the dev sandbox) — the usagetype substring below is inferred from
-    AWS's public Macie pricing page, not verified against a real
-    `get_products` response. Run `bucksawz prices update --services
-    Macie` and sanity-check `bucksawz prices info` before trusting this.
+    Confirmed against a live `get_products` response: the real usagetype
+    is "S3ContentClassification" — there's no "DataInspected" usagetype at
+    all, and "GB" doesn't appear in the usagetype string (only in the
+    price dimension's unit).
 
     Returns count of rows stored.
     """
@@ -2350,7 +2390,7 @@ def fetch_macie(
     for product in _iter_products(pricing, "AmazonMacie", filters):
         attrs = product.get("product", {}).get("attributes", {})
         usagetype = attrs.get("usagetype", "")
-        if "DataInspected" not in usagetype and "GB" not in usagetype:
+        if "S3ContentClassification" not in usagetype:
             continue
         result = _first_tier_price(product)
         if result is None:

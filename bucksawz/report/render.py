@@ -60,6 +60,33 @@ def _top_resources(projects: list[Project], n: int = 10) -> list[dict]:
     return items[:n]
 
 
+def _unpriced_resources(projects: list[Project]) -> list[dict]:
+    """Resources bucksawz recognized but couldn't price (missing config
+    attribute, no cached price for the region/instance type/etc.) — as
+    opposed to `_unsupported_resources`, which is types not recognized at
+    all. Walks sub_resources too, since e.g. an unpriced EBS volume nests
+    under its EC2 instance rather than appearing at the top level."""
+    items = []
+
+    def _walk(p: Project, resource: Resource) -> None:
+        if resource.no_price:
+            items.append({
+                "project": p.name,
+                "name": resource.name,
+                "resource_type": resource.resource_type,
+                "reason": resource.no_price_reason or "no price data available",
+            })
+        for sub in resource.sub_resources:
+            _walk(p, sub)
+
+    for p in projects:
+        if not p.breakdown:
+            continue
+        for r in p.breakdown.resources:
+            _walk(p, r)
+    return items
+
+
 def _usage_based_items(
     projects: list[Project],
     estimates: Optional[dict[str, float]] = None,
@@ -224,6 +251,8 @@ def render(
     usage_based = _usage_based_items(output.projects, estimates)
     changes = _changes(output.projects)
     diff_total = _diff_total(output.projects)
+    unpriced_resources = _unpriced_resources(output.projects)
+    unsupported_resources = _unsupported_resources(output.projects)
 
     # Support is a percentage of the total, so it's applied here rather than
     # priced per resource. Note it only covers what bucksawz priced — if the
@@ -299,6 +328,8 @@ def render(
         account_breakdown=sorted_accounts,
         account_breakdown_json=json.dumps(sorted_accounts),
         account_aliases=account_aliases or {},
+        unpriced_resources=unpriced_resources,
+        unsupported_resources=unsupported_resources,
         project_costs_json=json.dumps({
             p["name"]: p["monthly_cost"] for p in projects_data
         }),

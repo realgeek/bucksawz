@@ -74,15 +74,15 @@ def tmp_db(tmp_path) -> Path:
     price_db.upsert("AmazonCloudFront", "us-east-1", "cloudfront:requests:https", "Requests", 1.0e-5, db=db)
     price_db.upsert("AmazonKinesis", "us-east-1", "kinesis:shard:hour", "Hrs", 0.015, db=db)
     price_db.upsert("AmazonKinesis", "us-east-1", "kinesis:payload:units", "Units", 1.4e-8, db=db)
-    price_db.upsert("AWSStepFunctions", "us-east-1", "sfn:standard:transitions", "Transitions", 2.5e-5, db=db)
-    price_db.upsert("AWSStepFunctions", "us-east-1", "sfn:express:requests", "Requests", 1e-6, db=db)
-    price_db.upsert("AWSStepFunctions", "us-east-1", "sfn:express:duration", "GB-Second", 1.042e-5, db=db)
-    price_db.upsert("AmazonEventBridge", "us-east-1", "eventbridge:events", "Events", 1e-6, db=db)
+    price_db.upsert("AmazonStates", "us-east-1", "sfn:standard:transitions", "Transitions", 2.5e-5, db=db)
+    price_db.upsert("AmazonStates", "us-east-1", "sfn:express:requests", "Requests", 1e-6, db=db)
+    price_db.upsert("AmazonStates", "us-east-1", "sfn:express:duration", "GB-Second", 1.042e-5, db=db)
+    price_db.upsert("AWSEvents", "us-east-1", "eventbridge:events", "Events", 1e-6, db=db)
     price_db.upsert("AmazonVPC", "us-east-1", "transitgateway:hourly", "Hrs", 0.05, db=db)
     price_db.upsert("AmazonVPC", "us-east-1", "transitgateway:data", "GB", 0.02, db=db)
-    price_db.upsert("AmazonS3Files", "us-east-1", "s3files:cache", "GB-Mo", 0.30, db=db)
-    price_db.upsert("AmazonS3Files", "us-east-1", "s3files:requests:get", "Requests", 4e-7, db=db)
-    price_db.upsert("AmazonS3Files", "us-east-1", "s3files:requests:put", "Requests", 5e-6, db=db)
+    price_db.upsert("AmazonS3", "us-east-1", "s3files:storage", "GB-Mo", 0.30, db=db)
+    price_db.upsert("AmazonS3", "us-east-1", "s3files:write", "GB", 0.06, db=db)
+    price_db.upsert("AmazonS3", "us-east-1", "s3files:read", "GB", 0.03, db=db)
     price_db.upsert("AmazonES", "us-east-1", "opensearch:r6g.large.elasticsearch", "Hrs", 0.167, db=db)
     price_db.upsert("AmazonES", "us-east-1", "opensearch:storage:gp2", "GB-Mo", 0.135, db=db)
     price_db.upsert("AmazonES", "us-east-1", "opensearch:storage:gp3", "GB-Mo", 0.112, db=db)
@@ -121,11 +121,11 @@ def tmp_db(tmp_path) -> Path:
     price_db.upsert("AWSDirectConnect", "us-east-1", "directconnect:port:10gbps", "Hrs", 2.25, db=db)
     price_db.upsert("AWSAppSync", "us-east-1", "appsync:requests", "requests", 4.0, db=db)
     price_db.upsert("AWSAppSync", "us-east-1", "appsync:connectionminutes", "minutes", 0.00002, db=db)
-    price_db.upsert("AmazonCognitoSync", "us-east-1", "cognito:mau", "users", 0.0055, db=db)
+    price_db.upsert("AmazonCognito", "us-east-1", "cognito:mau", "users", 0.0055, db=db)
     price_db.upsert("AWSGlue", "us-east-1", "glue:dpuhour", "DPU-Hour", 0.44, db=db)
     price_db.upsert("AmazonSageMaker", "us-east-1", "sagemaker:ml.t3.medium", "Hrs", 0.0582, db=db)
     price_db.upsert("AmazonSageMaker", "us-east-1", "sagemaker:ml.m5.xlarge", "Hrs", 0.269, db=db)
-    price_db.upsert("AWSCloudHSM", "us-east-1", "cloudhsm:hourly", "Hrs", 1.60, db=db)
+    price_db.upsert("CloudHSM", "us-east-1", "cloudhsm:hourly", "Hrs", 1.60, db=db)
     price_db.upsert("AmazonMacie", "us-east-1", "macie:gb", "GB", 1.00, db=db)
     price_db.upsert("AmazonInspectorV2", "us-east-1", "inspector:ec2", "months", 0.01, db=db)
     price_db.upsert("AmazonInspectorV2", "us-east-1", "inspector:ecr", "images", 0.09, db=db)
@@ -1087,12 +1087,12 @@ def test_s3files_file_system_is_usage_based(tmp_db):
     assert resource.is_supported
     assert resource.monthly_cost is None
     names = [c.name for c in resource.cost_components]
-    assert names == ["Cache storage", "GET requests", "PUT requests"]
-    cache, get, put = resource.cost_components
-    assert all(c.usage_based for c in (cache, get, put))
-    assert cache.price == pytest.approx(0.30)
-    assert get.price == pytest.approx(4e-7 * 1_000_000)
-    assert put.price == pytest.approx(5e-6 * 1_000_000)
+    assert names == ["High-performance storage", "Data written to fast tier", "Data read from fast tier"]
+    storage, write, read = resource.cost_components
+    assert all(c.usage_based for c in (storage, write, read))
+    assert storage.price == pytest.approx(0.30)
+    assert write.price == pytest.approx(0.06)
+    assert read.price == pytest.approx(0.03)
 
 
 def test_s3files_file_system_unpriced_without_cached_price(empty_db):
@@ -1777,9 +1777,9 @@ def test_build_output_totals(tmp_db):
 
 
 def test_data_transfer_all_components_unit_priced_no_total(tmp_db):
-    price_db.upsert("AmazonEC2", "us-east-1", "datatransfer:out:0", "GB", 0.09, db=tmp_db)
-    price_db.upsert("AmazonEC2", "us-east-1", "datatransfer:out:10240", "GB", 0.085, db=tmp_db)
-    price_db.upsert("AmazonEC2", "us-east-1", "datatransfer:regional", "GB", 0.01, db=tmp_db)
+    price_db.upsert("AWSDataTransfer", "us-east-1", "datatransfer:out:0", "GB", 0.09, db=tmp_db)
+    price_db.upsert("AWSDataTransfer", "us-east-1", "datatransfer:out:10240", "GB", 0.085, db=tmp_db)
+    price_db.upsert("AWSDataTransfer", "us-east-1", "datatransfer:regional", "GB", 0.01, db=tmp_db)
 
     resource = price_data_transfer("us-east-1", db=tmp_db)
     assert resource is not None
@@ -1795,9 +1795,9 @@ def test_data_transfer_all_components_unit_priced_no_total(tmp_db):
 
 
 def test_data_transfer_tiers_sorted_regardless_of_insertion_order(tmp_db):
-    price_db.upsert("AmazonEC2", "us-east-1", "datatransfer:out:153600", "GB", 0.05, db=tmp_db)
-    price_db.upsert("AmazonEC2", "us-east-1", "datatransfer:out:0", "GB", 0.09, db=tmp_db)
-    price_db.upsert("AmazonEC2", "us-east-1", "datatransfer:out:51200", "GB", 0.07, db=tmp_db)
+    price_db.upsert("AWSDataTransfer", "us-east-1", "datatransfer:out:153600", "GB", 0.05, db=tmp_db)
+    price_db.upsert("AWSDataTransfer", "us-east-1", "datatransfer:out:0", "GB", 0.09, db=tmp_db)
+    price_db.upsert("AWSDataTransfer", "us-east-1", "datatransfer:out:51200", "GB", 0.07, db=tmp_db)
 
     resource = price_data_transfer("us-east-1", db=tmp_db)
     prices = [c.price for c in resource.cost_components]
@@ -1818,8 +1818,8 @@ _DT_TIERS = [
 
 def _seed_data_transfer_tiers(db):
     for key, price in _DT_TIERS:
-        price_db.upsert("AmazonEC2", "us-east-1", key, "GB", price, db=db)
-    price_db.upsert("AmazonEC2", "us-east-1", "datatransfer:regional", "GB", 0.01, db=db)
+        price_db.upsert("AWSDataTransfer", "us-east-1", key, "GB", price, db=db)
+    price_db.upsert("AWSDataTransfer", "us-east-1", "datatransfer:regional", "GB", 0.01, db=db)
 
 
 def test_estimate_data_transfer_within_first_tier(tmp_db):

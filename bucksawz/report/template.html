@@ -300,6 +300,9 @@ tr.project-total td {
     {% endif %}
     <li><a href="#top-resources">Top resources</a></li>
     <li><a href="#usage-based">Usage-based costs</a></li>
+    {% if unpriced_resources or unsupported_resources %}
+    <li><a href="#unpriced">Missing pricing data ({{ unpriced_resources | length + (unsupported_resources.values() | sum) }})</a></li>
+    {% endif %}
     <li><a href="#all-projects">All projects</a></li>
   </ul>
 </nav>
@@ -535,6 +538,50 @@ tr.project-total td {
     <p style="font-size:0.75rem;color:#6b7280;margin-top:0.5rem;">
       ~ Estimated from CloudWatch actuals or a --usage-file quantity × unit price. Treat as indicative, not billed.
     </p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- Missing pricing data -->
+  <a id="unpriced"></a>
+  {% if unpriced_resources or unsupported_resources %}
+  <div class="section-box">
+    <h3>Missing pricing data</h3>
+    <p style="font-size:0.75rem;color:#6b7280;margin-top:-0.25rem;margin-bottom:0.75rem;">
+      These resources aren't reflected in the totals above — bucksawz either couldn't
+      find a price for them or doesn't know the resource type at all.
+    </p>
+    {% if unpriced_resources %}
+    <table>
+      <thead>
+        <tr><th>Resource</th><th>Type</th><th>Project</th><th>Reason</th></tr>
+      </thead>
+      <tbody>
+        {% for u in unpriced_resources %}
+        <tr>
+          <td>{{ u.name }}</td>
+          <td class="resource-type">{{ u.resource_type }}</td>
+          <td class="resource-type">{{ u.project }}</td>
+          <td>{{ u.reason }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+    {% if unsupported_resources %}
+    <table style="margin-top: {{ '1rem' if unpriced_resources else '0' }};">
+      <thead>
+        <tr><th>Unrecognized resource type</th><th style="text-align:right">Count</th></tr>
+      </thead>
+      <tbody>
+        {% for rt, cnt in unsupported_resources.items() %}
+        <tr>
+          <td class="resource-type">{{ rt }}</td>
+          <td style="text-align:right">{{ cnt }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
     {% endif %}
   </div>
   {% endif %}

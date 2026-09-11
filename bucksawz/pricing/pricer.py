@@ -64,6 +64,7 @@ def _unpriced(tf: TFResource, reason: str) -> Resource:
         sub_resources=[],
         is_supported=False,
         no_price=True,
+        no_price_reason=reason,
     )
 
 
@@ -199,6 +200,7 @@ def _price_ebs_block(
             name=name, resource_type=resource_type, tags=tags,
             monthly_cost=None, hourly_cost=None, cost_components=[], sub_resources=[],
             is_supported=False, no_price=True,
+            no_price_reason="missing size/volume_size",
         )
 
     storage_row = price_db.get_price("AmazonEC2", region, f"ebs:storage:{volume_type}", db=db)
@@ -207,6 +209,7 @@ def _price_ebs_block(
             name=name, resource_type=resource_type, tags=tags,
             monthly_cost=None, hourly_cost=None, cost_components=[], sub_resources=[],
             is_supported=False, no_price=True,
+            no_price_reason=f"no EBS price data for {volume_type} in {region}",
         )
 
     size = float(size)
@@ -1010,7 +1013,7 @@ def price_data_transfer(region: str, db=None) -> Optional[Resource]:
     config at all. Real numbers need either a usage file or Cost Explorer/CUR
     actuals (not implemented yet) to fill in a quantity.
     """
-    rows = price_db.get_all("AmazonEC2", region, db=db)
+    rows = price_db.get_all("AWSDataTransfer", region, db=db)
     tier_rows = sorted(
         (r for r in rows if r["price_key"].startswith("datatransfer:out:")),
         key=lambda r: int(r["price_key"].rsplit(":", 1)[1]),
@@ -1061,7 +1064,7 @@ def estimate_data_transfer_cost(region: str, usage: dict, db=None) -> Optional[f
     if egress_gb is None and inter_az_gb is None:
         return None
 
-    rows = price_db.get_all("AmazonEC2", region, db=db)
+    rows = price_db.get_all("AWSDataTransfer", region, db=db)
     tier_rows = sorted(
         (r for r in rows if r["price_key"].startswith("datatransfer:out:")),
         key=lambda r: int(r["price_key"].rsplit(":", 1)[1]),
@@ -1313,8 +1316,8 @@ def _price_sfn_state_machine(tf: TFResource, region: str, db=None) -> Optional[R
     """
     sfn_type = (tf.values.get("type") or "STANDARD").upper()
     if sfn_type == "EXPRESS":
-        req_row = price_db.get_price("AWSStepFunctions", region, "sfn:express:requests", db=db)
-        dur_row = price_db.get_price("AWSStepFunctions", region, "sfn:express:duration", db=db)
+        req_row = price_db.get_price("AmazonStates", region, "sfn:express:requests", db=db)
+        dur_row = price_db.get_price("AmazonStates", region, "sfn:express:duration", db=db)
         if req_row is None and dur_row is None:
             return _unpriced(tf, f"no Step Functions Express price data in {region}")
         comps = [
@@ -1332,7 +1335,7 @@ def _price_sfn_state_machine(tf: TFResource, region: str, db=None) -> Optional[R
             ),
         ]
     else:
-        row = price_db.get_price("AWSStepFunctions", region, "sfn:standard:transitions", db=db)
+        row = price_db.get_price("AmazonStates", region, "sfn:standard:transitions", db=db)
         if row is None:
             return _unpriced(tf, f"no Step Functions Standard price data in {region}")
         comps = [CostComponent(
@@ -1351,7 +1354,7 @@ def _price_eventbridge_event_bus(tf: TFResource, region: str, db=None) -> Option
     """Entirely usage-based, like SNS: a custom bus has no fixed monthly
     cost, only per-published-event pricing driven by traffic the config
     can't reveal."""
-    row = price_db.get_price("AmazonEventBridge", region, "eventbridge:events", db=db)
+    row = price_db.get_price("AWSEvents", region, "eventbridge:events", db=db)
     if row is None:
         return _unpriced(tf, f"no EventBridge price data in {region}")
     comp = CostComponent(
@@ -1396,33 +1399,37 @@ def _price_transit_gateway_attachment(tf: TFResource, region: str, db=None) -> O
 
 def _price_s3files_file_system(tf: TFResource, region: str, db=None) -> Optional[Resource]:
     """
-    Entirely usage-based, like S3/EFS: how much of the mounted bucket ends
-    up cached, and how many GET/PUT requests hit that cache, isn't in the
-    file system's own config. The underlying bucket's ordinary S3 storage
-    cost is priced separately by `_price_s3_bucket` against the
-    `aws_s3_bucket` resource itself — not duplicated here.
+    Entirely usage-based, like S3/EFS: how much data lands in the
+    high-performance storage tier (a rolling window of recently-touched
+    data, sized by the file system's `cache_expiration_days`/file-size
+    tunables, not a config-derivable byte count) and how much moves onto
+    and off of it, isn't in the file system's own config. The underlying
+    bucket's ordinary S3 storage cost is priced separately by
+    `_price_s3_bucket` against the `aws_s3_bucket` resource itself — not
+    duplicated here. Unlike ordinary S3 requests, write/read rates here are
+    per-GB, not per-request — no `_PER_MILLION` scaling.
     """
-    cache_row = price_db.get_price("AmazonS3Files", region, "s3files:cache", db=db)
-    if cache_row is None:
+    storage_row = price_db.get_price("AmazonS3", region, "s3files:storage", db=db)
+    if storage_row is None:
         return _unpriced(tf, f"no S3 Files price data in {region}")
-    get_row = price_db.get_price("AmazonS3Files", region, "s3files:requests:get", db=db)
-    put_row = price_db.get_price("AmazonS3Files", region, "s3files:requests:put", db=db)
+    write_row = price_db.get_price("AmazonS3", region, "s3files:write", db=db)
+    read_row = price_db.get_price("AmazonS3", region, "s3files:read", db=db)
     comps = [
         CostComponent(
-            name="Cache storage", unit="GB-months",
+            name="High-performance storage", unit="GB-months",
             hourly_quantity=None, monthly_quantity=None,
-            price=cache_row["price_usd"], hourly_cost=None, monthly_cost=None, usage_based=True,
+            price=storage_row["price_usd"], hourly_cost=None, monthly_cost=None, usage_based=True,
         ),
         CostComponent(
-            name="GET requests", unit="1M requests",
+            name="Data written to fast tier", unit="GB",
             hourly_quantity=None, monthly_quantity=None,
-            price=get_row["price_usd"] * _PER_MILLION if get_row else None,
+            price=write_row["price_usd"] if write_row else None,
             hourly_cost=None, monthly_cost=None, usage_based=True,
         ),
         CostComponent(
-            name="PUT requests", unit="1M requests",
+            name="Data read from fast tier", unit="GB",
             hourly_quantity=None, monthly_quantity=None,
-            price=put_row["price_usd"] * _PER_MILLION if put_row else None,
+            price=read_row["price_usd"] if read_row else None,
             hourly_cost=None, monthly_cost=None, usage_based=True,
         ),
     ]
@@ -1992,7 +1999,7 @@ def _price_cognito_user_pool(tf: TFResource, region: str, db=None) -> Optional[R
     A single representative (first-tier) MAU rate is used; see
     `fetch_cognito`'s docstring for the tiering/advanced-security caveat.
     """
-    row = price_db.get_price("AmazonCognitoSync", region, "cognito:mau", db=db)
+    row = price_db.get_price("AmazonCognito", region, "cognito:mau", db=db)
     if row is None:
         return _unpriced(tf, f"no Cognito price data in {region}")
     comp = CostComponent(
@@ -2125,7 +2132,7 @@ def _price_sagemaker_endpoint_configuration(tf: TFResource, region: str, db=None
 
 def _price_cloudhsm_hsm(tf: TFResource, region: str, db=None) -> Optional[Resource]:
     """aws_cloudhsm_v2_hsm: flat HSM-hour rate, no instance-type variation."""
-    row = price_db.get_price("AWSCloudHSM", region, "cloudhsm:hourly", db=db)
+    row = price_db.get_price("CloudHSM", region, "cloudhsm:hourly", db=db)
     if row is None:
         return _unpriced(tf, f"no CloudHSM price data in {region}")
     monthly_cost = row["price_usd"] * 730
@@ -2533,6 +2540,7 @@ def diff_resources(prior: list[Resource], planned: list[Resource]) -> list[Resou
                 sub_resources=[],
                 is_supported=ref.is_supported,
                 no_price=ref.no_price,
+                no_price_reason=ref.no_price_reason,
             )
         )
     return out
