@@ -244,12 +244,18 @@ def prices_info():
 )
 @click.option(
     "--aws-profile", default=None,
-    help="AWS profile for Cost Explorer data-transfer actuals. When usage is found, "
-         "these supersede --usage-file's data_transfer values with real account data.",
+    help="AWS profile for Cost Explorer actuals: data transfer, S3 storage, load "
+         "balancer LCU usage, Aurora storage, and EC2/ElastiCache runtime hours. Data "
+         "transfer picks the best available window automatically (prior-3-month "
+         "average, then trailing 30 days, then extrapolated month-to-date); the "
+         "others use --ce-lookback-days. When usage is found, these supersede "
+         "--usage-file's data_transfer values and override the 24/7 assumption for "
+         "EC2/ElastiCache with real account data.",
 )
 @click.option(
     "--ce-lookback-days", default=30, show_default=True,
-    help="Days of Cost Explorer history to average for data-transfer actuals.",
+    help="Days of Cost Explorer history to average for S3/ELB/RDS/EC2/ElastiCache "
+         "actuals (not used for data transfer, which picks its own window).",
 )
 @_support_plan_option
 def price_state(
