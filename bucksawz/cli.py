@@ -325,11 +325,11 @@ def price_state(
     estimates = {}
     if aws_profile:
         from .aws.costexplorer import (
-            fetch_data_transfer_actuals, fetch_ec2_runtime_actuals,
+            fetch_data_transfer_estimate, fetch_ec2_runtime_actuals,
             fetch_elasticache_runtime_actuals, fetch_elb_usage_actuals,
             fetch_rds_storage_actuals, fetch_s3_storage_actuals,
         )
-        ce_usage = fetch_data_transfer_actuals(ce_lookback_days, aws_profile, region)
+        ce_usage = fetch_data_transfer_estimate(aws_profile, region)
         if ce_usage:
             usage = dict(usage or {})
             usage["data_transfer"] = ce_usage

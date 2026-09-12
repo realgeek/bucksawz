@@ -8,6 +8,7 @@ Cache lives in ~/.cache/bucksawz/. Override with $BUCKSAWZ_CACHE_DIR.
 """
 from __future__ import annotations
 import json
+from calendar import monthrange
 from datetime import date, timedelta
 from typing import Optional
 import boto3
@@ -27,6 +28,10 @@ def _organizations_client(profile: Optional[str]):
     # regardless of the --aws-region the rest of enrich uses.
     session = boto3.Session(profile_name=profile, region_name="us-east-1")
     return session.client("organizations")
+
+
+def _today() -> date:
+    return date.today()
 
 
 def _date_range(lookback_days: int) -> tuple[str, str]:
@@ -163,23 +168,12 @@ def _get_forecast(
         return None
 
 
-def fetch_data_transfer_actuals(
-    lookback_days: int,
-    profile: Optional[str],
-    region: str,
-    cache_ttl_days: int = _DEFAULT_TTL_DAYS,
-) -> Optional[dict[str, float]]:
+def _sum_data_transfer_usage(ce, start: str, end: str, region: str) -> tuple[float, float, bool]:
     """
-    Real monthly internet-egress and inter-AZ data-transfer volume from Cost
-    Explorer, as an alternative to `--usage-file` when `price-state` has AWS
-    account access — see pricer.estimate_data_transfer_cost, which accepts
-    either source through the same {internet_egress_gb_month, inter_az_gb_month}
-    shape used by usage_file.data_transfer_usage.
-
-    Filters to SERVICE "EC2 - Other" (where AWS buckets data-transfer line
-    items in Cost Explorer) and the target REGION, grouped by USAGE_TYPE,
-    Metric UsageQuantity, averaged over the lookback window. Classifies by
-    usage-type suffix the same way fetch_data_transfer (fetcher.py)
+    Raw (un-averaged) egress/inter-AZ GB over [start, end) from Cost
+    Explorer. Filters to SERVICE "EC2 - Other" (where AWS buckets
+    data-transfer line items) and REGION, grouped by USAGE_TYPE. Classifies
+    by usage-type suffix the same way fetch_data_transfer (fetcher.py)
     classifies the Pricing API's `transferType`: "-Out-Bytes" (excluding
     "In-Bytes") is internet egress, "-Regional-Bytes" is inter-AZ.
 
@@ -189,22 +183,7 @@ def fetch_data_transfer_actuals(
     response. Validate against `aws ce get-cost-and-usage` output for a real
     account with data-transfer spend before trusting the numbers, and adjust
     the suffixes here if they don't match.
-
-    Returns None if Cost Explorer has no matching usage in the lookback
-    window (e.g. no data-transfer spend), so callers can fall back to
-    `--usage-file`.
     """
-    ce = _ce_client(profile, region)
-    start, end = _date_range(lookback_days)
-
-    key = cache_key("ce_data_transfer_usage", profile or "default", region, start, end)
-    cached = cache_get(key, ttl_days=cache_ttl_days)
-    if cached is not None:
-        print(f"  [cache hit] data_transfer_usage ({start}→{end})")
-        return cached
-
-    print(f"  [aws] fetching Cost Explorer data-transfer usage ({start}→{end})…")
-    months = max(lookback_days / 30, 1)
     egress_gb = 0.0
     inter_az_gb = 0.0
     found = False
@@ -233,6 +212,44 @@ def fetch_data_transfer_actuals(
                     inter_az_gb += qty
                     found = True
 
+    return egress_gb, inter_az_gb, found
+
+
+def fetch_data_transfer_actuals(
+    lookback_days: int,
+    profile: Optional[str],
+    region: str,
+    cache_ttl_days: int = _DEFAULT_TTL_DAYS,
+) -> Optional[dict[str, float]]:
+    """
+    Real monthly internet-egress and inter-AZ data-transfer volume from Cost
+    Explorer, averaged over a fixed trailing window — as an alternative to
+    `--usage-file` when `price-state` has AWS account access. See
+    pricer.estimate_data_transfer_cost, which accepts either source through
+    the same {internet_egress_gb_month, inter_az_gb_month} shape used by
+    usage_file.data_transfer_usage.
+
+    Prefer `fetch_data_transfer_estimate` for a current-month estimate: it
+    picks the most stable window automatically (3-month average when
+    available) instead of a single fixed lookback. This function remains for
+    callers that want a specific, fixed-length window instead.
+
+    Returns None if Cost Explorer has no matching usage in the lookback
+    window (e.g. no data-transfer spend), so callers can fall back to
+    `--usage-file`.
+    """
+    ce = _ce_client(profile, region)
+    start, end = _date_range(lookback_days)
+
+    key = cache_key("ce_data_transfer_usage", profile or "default", region, start, end)
+    cached = cache_get(key, ttl_days=cache_ttl_days)
+    if cached is not None:
+        print(f"  [cache hit] data_transfer_usage ({start}→{end})")
+        return cached
+
+    print(f"  [aws] fetching Cost Explorer data-transfer usage ({start}→{end})…")
+    months = max(lookback_days / 30, 1)
+    egress_gb, inter_az_gb, found = _sum_data_transfer_usage(ce, start, end, region)
     if not found:
         return None
 
@@ -242,6 +259,96 @@ def fetch_data_transfer_actuals(
     }
     cache_put(key, result)
     return result
+
+
+def _first_of_month(d: date) -> date:
+    return d.replace(day=1)
+
+
+def _months_before(d: date, n: int) -> date:
+    """First-of-month date `n` months before `d`'s month."""
+    month = d.month - n
+    year = d.year
+    while month <= 0:
+        month += 12
+        year -= 1
+    return date(year, month, 1)
+
+
+def fetch_data_transfer_estimate(
+    profile: Optional[str],
+    region: str,
+    cache_ttl_days: int = _DEFAULT_TTL_DAYS,
+) -> Optional[dict[str, float]]:
+    """
+    Best available monthly egress/inter-AZ estimate for the *current* month,
+    picking the most stable source Cost Explorer can actually supply:
+
+      1. Average of the prior 3 complete calendar months — smooths out a
+         one-off spike or lull in any single month. Used whenever Cost
+         Explorer has data-transfer usage anywhere in that window.
+      2. The trailing 30 days, when there isn't 3 months of history yet
+         (e.g. a newer account or region).
+      3. Month-to-date, extrapolated to a full month by elapsed-day
+         fraction, as a last resort (e.g. the account's first few days).
+
+    Returns None only if none of the three windows found any data-transfer
+    usage at all, so callers can fall back to `--usage-file`.
+    """
+    ce = _ce_client(profile, region)
+    today = _today()
+    three_months_start = _months_before(today, 3)
+    this_month_start = _first_of_month(today)
+
+    key = cache_key(
+        "ce_data_transfer_estimate", profile or "default", region,
+        three_months_start.isoformat(), today.isoformat(),
+    )
+    cached = cache_get(key, ttl_days=cache_ttl_days)
+    if cached is not None:
+        print(f"  [cache hit] data_transfer_estimate ({cached.get('source', '?')})")
+        return {k: v for k, v in cached.items() if k != "source"}
+
+    print("  [aws] fetching Cost Explorer data-transfer usage for a current-month estimate…")
+
+    egress_gb, inter_az_gb, found = _sum_data_transfer_usage(
+        ce, three_months_start.isoformat(), this_month_start.isoformat(), region,
+    )
+    if found:
+        result = {
+            "internet_egress_gb_month": egress_gb / 3,
+            "inter_az_gb_month": inter_az_gb / 3,
+            "source": "average of the prior 3 full months",
+        }
+    else:
+        thirty_days_ago = (today - timedelta(days=30)).isoformat()
+        egress_gb, inter_az_gb, found = _sum_data_transfer_usage(
+            ce, thirty_days_ago, today.isoformat(), region,
+        )
+        if found:
+            result = {
+                "internet_egress_gb_month": egress_gb,
+                "inter_az_gb_month": inter_az_gb,
+                "source": "trailing 30 days (not enough history for a 3-month average)",
+            }
+        else:
+            elapsed_days = (today - this_month_start).days or 1
+            days_in_month = monthrange(today.year, today.month)[1]
+            egress_gb, inter_az_gb, found = _sum_data_transfer_usage(
+                ce, this_month_start.isoformat(), today.isoformat(), region,
+            )
+            if not found:
+                return None
+            scale = days_in_month / elapsed_days
+            result = {
+                "internet_egress_gb_month": egress_gb * scale,
+                "inter_az_gb_month": inter_az_gb * scale,
+                "source": "month-to-date, extrapolated to a full month",
+            }
+
+    print(f"  using {result['source']}")
+    cache_put(key, result)
+    return {k: v for k, v in result.items() if k != "source"}
 
 
 def _fetch_usage_by_type(

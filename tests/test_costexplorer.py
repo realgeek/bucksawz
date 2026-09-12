@@ -40,6 +40,21 @@ def _install(monkeypatch, groups_by_period):
     monkeypatch.setattr(costexplorer, "_ce_client", lambda profile, region: _FakeCE(groups_by_period))
 
 
+class _FakeCEQueue:
+    """Returns a different canned response for each successive get_paginator() call."""
+    def __init__(self, responses):
+        self._responses = list(responses)
+
+    def get_paginator(self, name):
+        assert name == "get_cost_and_usage"
+        groups = self._responses.pop(0) if self._responses else []
+        return _FakePaginator(groups)
+
+
+def _install_queue(monkeypatch, responses):
+    monkeypatch.setattr(costexplorer, "_ce_client", lambda profile, region: _FakeCEQueue(responses))
+
+
 def test_fetch_data_transfer_actuals_splits_egress_and_inter_az(monkeypatch):
     _install(monkeypatch, [
         ("USE1-DataTransfer-Out-Bytes", 1024.0),
@@ -72,6 +87,48 @@ def test_fetch_data_transfer_actuals_averages_over_lookback_months(monkeypatch):
     ])
     result = costexplorer.fetch_data_transfer_actuals(60, None, "us-east-1")
     assert result["internet_egress_gb_month"] == pytest.approx(3000.0)
+
+
+# ── Tiered current-month data-transfer estimate ──────────────────────────────
+
+
+def test_fetch_data_transfer_estimate_prefers_3month_average(monkeypatch):
+    _install_queue(monkeypatch, [[("USE1-DataTransfer-Out-Bytes", 3000.0)]])
+    result = costexplorer.fetch_data_transfer_estimate(None, "us-east-1")
+    assert result == {
+        "internet_egress_gb_month": pytest.approx(1000.0),
+        "inter_az_gb_month": pytest.approx(0.0),
+    }
+
+
+def test_fetch_data_transfer_estimate_falls_back_to_30_days(monkeypatch):
+    _install_queue(monkeypatch, [
+        [],  # prior-3-months window: no usage
+        [("USE1-DataTransfer-Out-Bytes", 500.0)],  # trailing 30 days
+    ])
+    result = costexplorer.fetch_data_transfer_estimate(None, "us-east-1")
+    assert result == {
+        "internet_egress_gb_month": pytest.approx(500.0),
+        "inter_az_gb_month": pytest.approx(0.0),
+    }
+
+
+def test_fetch_data_transfer_estimate_falls_back_to_extrapolated_month_to_date(monkeypatch):
+    import datetime as _dt
+    fixed_today = _dt.date(2026, 9, 11)  # 10 elapsed days into a 30-day September
+    monkeypatch.setattr(costexplorer, "_today", lambda: fixed_today)
+    _install_queue(monkeypatch, [
+        [],  # prior-3-months window: no usage
+        [],  # trailing 30 days: no usage
+        [("USE1-DataTransfer-Out-Bytes", 100.0)],  # month-to-date: 10 GB/day so far
+    ])
+    result = costexplorer.fetch_data_transfer_estimate(None, "us-east-1")
+    assert result["internet_egress_gb_month"] == pytest.approx(100.0 * 30 / 10)
+
+
+def test_fetch_data_transfer_estimate_none_without_any_usage(monkeypatch):
+    _install_queue(monkeypatch, [[], [], []])
+    assert costexplorer.fetch_data_transfer_estimate(None, "us-east-1") is None
 
 
 # ── New usage-category actuals fetchers ──────────────────────────────────────
