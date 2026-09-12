@@ -8,6 +8,7 @@ build/
 .eggs/
 *.html
 !bucksawz/report/template.html
+!bucksawz/forecast_viewer.html
 
 # local tooling state
 .memory/

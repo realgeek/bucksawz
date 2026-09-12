@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bucksawz forecast</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  color: #111827;
+  background: #f9fafb;
+}
+header {
+  background: #1e293b;
+  color: #f8fafc;
+  padding: 1rem 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+header h1 { font-size: 1.1rem; margin: 0; }
+header .generated { font-size: 0.75rem; color: #94a3b8; }
+main { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+}
+.toggle {
+  display: inline-flex;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.toggle button {
+  border: none;
+  background: #fff;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  color: #374151;
+}
+.toggle button.active { background: #1e293b; color: #f8fafc; }
+label.extrapolate {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: #374151;
+}
+label.extrapolate input:disabled + span { color: #9ca3af; }
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+.card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+.card .label { font-size: 0.72rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.06em; }
+.card .value { font-size: 1.4rem; font-weight: 700; margin-top: 0.2rem; }
+.card.green .value { color: #059669; }
+.card.blue  .value { color: #2563eb; }
+.card.amber .value { color: #d97706; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+}
+th, td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #f1f5f9;
+  font-size: 0.82rem;
+}
+th { background: #f8fafc; color: #6b7280; font-weight: 600; text-transform: uppercase; font-size: 0.68rem; letter-spacing: 0.05em; }
+tr.new-resource { background: #fffbeb; }
+.badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: #fef3c7;
+  color: #92400e;
+  margin-left: 0.4rem;
+}
+.badge.estimated { background: #dbeafe; color: #1e40af; }
+.na { color: #9ca3af; font-style: italic; }
+.empty { padding: 2rem; text-align: center; color: #6b7280; }
+.error { padding: 1rem 1.5rem; background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; border-radius: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>bucksawz forecast</h1>
+  <span class="generated" id="generated"></span>
+</header>
+<main id="app">
+  <div class="empty">Loading&hellip;</div>
+</main>
+<script>
+(function () {
+  const app = document.getElementById("app");
+  const generatedEl = document.getElementById("generated");
+
+  let payload = null;
+  let view = "actual"; // "actual" | "proposed"
+  let extrapolate = false;
+
+  function fmtMoney(v) {
+    if (v === null || v === undefined) return null;
+    return "$" + Number(v).toFixed(2);
+  }
+
+  function summaryCards(output) {
+    const s = output.summary || {};
+    const items = [
+      ["Total monthly cost", fmtMoney(output.totalMonthlyCost) || "$0.00", "blue"],
+      ["Detected resources", s.totalDetectedResources || 0, ""],
+      ["Estimated resources", s.totalSupportedResources || 0, "green"],
+      ["Free resources", s.totalNoPriceResources || 0, ""],
+      ["Unsupported", s.totalUnsupportedResources || 0, "amber"],
+    ];
+    const wrap = document.createElement("div");
+    wrap.className = "cards";
+    for (const [label, value, cls] of items) {
+      const card = document.createElement("div");
+      card.className = "card" + (cls ? " " + cls : "");
+      const l = document.createElement("div");
+      l.className = "label";
+      l.textContent = label;
+      const v = document.createElement("div");
+      v.className = "value";
+      v.textContent = value;
+      card.append(l, v);
+      wrap.append(card);
+    }
+    return wrap;
+  }
+
+  function resourceTotal(r) {
+    // Mirrors Resource.total_monthly_cost() in schema/infracost.py: a
+    // resource's own JSON only carries raw fields, not the derived total.
+    if (r.monthlyCost !== null && r.monthlyCost !== undefined) return r.monthlyCost;
+    let total = 0;
+    for (const c of r.costComponents || []) {
+      if (c.monthlyCost !== null && c.monthlyCost !== undefined) total += c.monthlyCost;
+    }
+    for (const sub of r.subresources || []) {
+      total += resourceTotal(sub);
+    }
+    return total;
+  }
+
+  function newResourceLookup() {
+    // { "project::name": {resourceType, extrapolatedMonthlyCost} }
+    const map = {};
+    for (const r of payload.newResources || []) {
+      map[r.project + "::" + r.name] = r;
+    }
+    return map;
+  }
+
+  function resourceTable(output) {
+    const newMap = view === "proposed" ? newResourceLookup() : {};
+    const table = document.createElement("table");
+    const thead = document.createElement("thead");
+    thead.innerHTML =
+      "<tr><th>Project</th><th>Resource</th><th>Type</th><th>Monthly cost</th></tr>";
+    const tbody = document.createElement("tbody");
+
+    let rows = 0;
+    for (const project of output.projects || []) {
+      const resources = (project.breakdown && project.breakdown.resources) || [];
+      for (const r of resources) {
+        const key = project.name + "::" + r.name;
+        const isNew = Object.prototype.hasOwnProperty.call(newMap, key);
+        const tr = document.createElement("tr");
+        if (isNew) tr.className = "new-resource";
+
+        const tdProject = document.createElement("td");
+        tdProject.textContent = project.name;
+        const tdName = document.createElement("td");
+        tdName.textContent = r.name;
+        if (isNew) {
+          const badge = document.createElement("span");
+          badge.className = "badge";
+          badge.textContent = "not yet deployed";
+          tdName.append(badge);
+        }
+        const tdType = document.createElement("td");
+        tdType.textContent = r.resourceType || "";
+
+        const tdCost = document.createElement("td");
+        if (isNew) {
+          if (extrapolate) {
+            const est = newMap[key].extrapolatedMonthlyCost;
+            if (est === null || est === undefined) {
+              tdCost.innerHTML = '<span class="na">no comparable deployed resource</span>';
+            } else {
+              tdCost.textContent = fmtMoney(est);
+              const badge = document.createElement("span");
+              badge.className = "badge estimated";
+              badge.textContent = "estimated";
+              tdCost.append(badge);
+            }
+          } else {
+            tdCost.innerHTML = '<span class="na">not deployed</span>';
+          }
+        } else {
+          tdCost.textContent = fmtMoney(resourceTotal(r)) || "$0.00";
+        }
+
+        tr.append(tdProject, tdName, tdType, tdCost);
+        tbody.append(tr);
+        rows++;
+      }
+    }
+    table.append(thead, tbody);
+    if (rows === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "No resources.";
+      return empty;
+    }
+    return table;
+  }
+
+  function render() {
+    app.innerHTML = "";
+
+    const toolbar = document.createElement("div");
+    toolbar.className = "toolbar";
+
+    const toggle = document.createElement("div");
+    toggle.className = "toggle";
+    for (const [key, label] of [["actual", "Actual"], ["proposed", "Proposed"]]) {
+      const btn = document.createElement("button");
+      btn.textContent = label;
+      if (key === view) btn.className = "active";
+      btn.addEventListener("click", () => {
+        view = key;
+        render();
+      });
+      toggle.append(btn);
+    }
+    toolbar.append(toggle);
+
+    const label = document.createElement("label");
+    label.className = "extrapolate";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = extrapolate;
+    checkbox.disabled = view !== "proposed";
+    checkbox.addEventListener("change", () => {
+      extrapolate = checkbox.checked;
+      render();
+    });
+    const span = document.createElement("span");
+    span.textContent = "Extrapolate cost for not-yet-deployed resources";
+    label.append(checkbox, span);
+    toolbar.append(label);
+
+    app.append(toolbar);
+
+    const output = payload[view];
+    app.append(summaryCards(output));
+    app.append(resourceTable(output));
+  }
+
+  async function load() {
+    try {
+      const manifestResp = await fetch("bucksawz_manifest.json", { cache: "no-store" });
+      if (!manifestResp.ok) throw new Error("could not read bucksawz_manifest.json (" + manifestResp.status + ")");
+      const manifest = await manifestResp.json();
+
+      const dataResp = await fetch(manifest.latest, { cache: "no-store" });
+      if (!dataResp.ok) throw new Error("could not read " + manifest.latest + " (" + dataResp.status + ")");
+      payload = await dataResp.json();
+
+      generatedEl.textContent = payload.generatedAt ? "Generated " + payload.generatedAt : "";
+      render();
+    } catch (err) {
+      app.innerHTML = "";
+      const box = document.createElement("div");
+      box.className = "error";
+      box.textContent =
+        "Couldn't load forecast data: " + err.message +
+        ". This page must be served over http(s) (e.g. `bucksawz serve`), not opened directly from disk.";
+      app.append(box);
+    }
+  }
+
+  load();
+})();
+</script>
+</body>
+</html>

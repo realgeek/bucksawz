@@ -439,6 +439,70 @@ def price_state(
         click.echo(line)
 
 
+@cli.command("forecast")
+@click.option(
+    "--config", "config_path", default="bucksawz.yml", show_default=True,
+    help="YAML config naming the 'actual' and 'proposed' commands to run. See "
+         "forecast_config.py for the schema.",
+)
+def forecast(config_path):
+    """Price what's actually deployed against what the whole project would
+    look like fully deployed, and write a timestamped comparison JSON.
+
+    Runs two shell commands from the config file -- one that produces the
+    currently-deployed terraform state/plan JSON ("actual"), one that
+    produces a hypothetical fully-deployed version ("proposed", e.g. a plan
+    with a not-ready-resources flag turned on) -- prices both, and works out
+    which resources in "proposed" don't exist in "actual" yet.
+
+    Writes `bucksawz_<timestamp>.json` (see --config's output.filename),
+    updates `bucksawz_manifest.json` to point at it, and (re)writes the
+    static `bucksawz_viewer.html`. Run `bucksawz serve` in the same
+    directory to view it -- browsers block a plain HTML file from fetching
+    its own JSON sibling when opened directly from disk.
+    """
+    from .forecast_config import load_forecast_config
+    from .forecast import run_forecast
+
+    try:
+        config = load_forecast_config(config_path)
+        output_path = run_forecast(config)
+    except (ValueError, RuntimeError, FileNotFoundError) as e:
+        click.echo(str(e), err=True)
+        raise SystemExit(1)
+    click.echo(f"Forecast written to {output_path}")
+    click.echo(f"Run `bucksawz serve --dir {config.output_dir}` to view it.")
+
+
+@cli.command("serve")
+@click.option("--dir", "serve_dir", default=".", show_default=True, help="Directory to serve")
+@click.option("--port", default=8765, show_default=True)
+@click.option("--no-browser", is_flag=True, help="Don't automatically open a browser tab")
+def serve(serve_dir, port, no_browser):
+    """Serve a directory over local HTTP -- for viewing bucksawz_viewer.html.
+
+    A plain double-clicked HTML file can't fetch its own JSON sibling
+    (browsers block fetch() from file:// URLs), so the forecast viewer needs
+    to be served instead of opened directly.
+    """
+    import functools
+    import http.server
+    import webbrowser
+
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=serve_dir)
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
+    url = f"http://127.0.0.1:{port}/bucksawz_viewer.html"
+    click.echo(f"Serving {serve_dir} at {url} (Ctrl+C to stop)")
+    if not no_browser:
+        webbrowser.open(url)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
+
+
 @cli.command("from-html")
 @click.argument("html_path")
 @click.option("--output", "-o", "output_path", default="report.html", show_default=True, help="Output HTML path")

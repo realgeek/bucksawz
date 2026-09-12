@@ -12,8 +12,11 @@ from bucksawz.pricing.pricer import (
     estimate_elb_lcu_cost,
     estimate_rds_storage_cost,
     estimate_s3_storage_cost,
+    extrapolate_by_resource_type,
+    find_new_resources,
     price_data_transfer,
     price_resources,
+    price_terraform_json,
 )
 from bucksawz.pricing.tf_state import TFResource
 from bucksawz.schema.infracost import Resource
@@ -1965,12 +1968,12 @@ def test_apply_elasticache_runtime_actuals_overrides_flat_730h(tmp_db):
     assert resources[0].monthly_cost == pytest.approx(0.017 * 300)
 
 
-def _resource(name, no_price=False, unsupported=False):
+def _resource(name, no_price=False, unsupported=False, resource_type="aws_instance", monthly_cost=10.0):
     return Resource(
         name=name,
-        resource_type="aws_instance",
+        resource_type=resource_type,
         tags={},
-        monthly_cost=None if (no_price or unsupported) else 10.0,
+        monthly_cost=None if (no_price or unsupported) else monthly_cost,
         hourly_cost=None,
         cost_components=[],
         sub_resources=[],
@@ -1994,3 +1997,73 @@ def test_build_multi_project_output_aggregates_top_level_summary():
     assert output.summary["totalSupportedResources"] == 1
     assert output.summary["totalNoPriceResources"] == 1
     assert output.summary["totalUnsupportedResources"] == 1
+
+
+def test_price_terraform_json_routes_raw_multi_stack():
+    data = {"stack-a": {"resources": []}}
+    output = price_terraform_json(data, "us-east-1")
+    assert output.version == "bucksawz-price-state-multi-1"
+    assert output.projects[0].name == "stack-a"
+
+
+def test_find_new_resources_returns_only_undeployed():
+    actual = build_multi_project_output({
+        "stack-a": [_resource("aws_instance.a1")],
+    })
+    proposed = build_multi_project_output({
+        "stack-a": [_resource("aws_instance.a1"), _resource("aws_instance.a2")],
+    })
+    new = find_new_resources(actual, proposed)
+    assert list(new.keys()) == ["stack-a"]
+    assert [r.name for r in new["stack-a"]] == ["aws_instance.a2"]
+
+
+def test_find_new_resources_whole_new_project_counts_all_resources():
+    actual = build_multi_project_output({"stack-a": [_resource("aws_instance.a1")]})
+    proposed = build_multi_project_output({
+        "stack-a": [_resource("aws_instance.a1")],
+        "stack-b": [_resource("aws_instance.b1")],
+    })
+    new = find_new_resources(actual, proposed)
+    assert [r.name for r in new["stack-b"]] == ["aws_instance.b1"]
+
+
+def test_find_new_resources_no_diff_is_empty():
+    actual = build_multi_project_output({"stack-a": [_resource("aws_instance.a1")]})
+    proposed = build_multi_project_output({"stack-a": [_resource("aws_instance.a1")]})
+    assert find_new_resources(actual, proposed) == {}
+
+
+def test_extrapolate_by_resource_type_averages_deployed_same_type():
+    actual = build_multi_project_output({
+        "stack-a": [
+            _resource("aws_instance.a1", resource_type="aws_instance", monthly_cost=10.0),
+            _resource("aws_instance.a2", resource_type="aws_instance", monthly_cost=20.0),
+        ],
+    })
+    new_by_project = {"stack-a": [_resource("aws_instance.a3", resource_type="aws_instance")]}
+    estimates = extrapolate_by_resource_type(actual, new_by_project)
+    assert estimates["stack-a"]["aws_instance.a3"] == pytest.approx(15.0)
+
+
+def test_extrapolate_by_resource_type_no_comparable_type_is_none():
+    actual = build_multi_project_output({
+        "stack-a": [_resource("aws_instance.a1", resource_type="aws_instance")],
+    })
+    new_by_project = {"stack-a": [_resource("aws_s3_bucket.new", resource_type="aws_s3_bucket")]}
+    estimates = extrapolate_by_resource_type(actual, new_by_project)
+    assert estimates["stack-a"]["aws_s3_bucket.new"] is None
+
+
+def test_extrapolate_by_resource_type_excludes_unsupported_and_no_price():
+    actual = build_multi_project_output({
+        "stack-a": [
+            _resource("aws_instance.a1", resource_type="aws_instance", monthly_cost=10.0),
+            _resource("aws_instance.a2", resource_type="aws_instance", unsupported=True),
+            _resource("aws_instance.a3", resource_type="aws_instance", no_price=True),
+        ],
+    })
+    new_by_project = {"stack-a": [_resource("aws_instance.a4", resource_type="aws_instance")]}
+    estimates = extrapolate_by_resource_type(actual, new_by_project)
+    # Only a1 (the sole supported, priced instance) contributes to the average.
+    assert estimates["stack-a"]["aws_instance.a4"] == pytest.approx(10.0)

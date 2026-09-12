@@ -11,7 +11,9 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from . import db as price_db
-from .tf_state import TFResource
+from .tf_state import (
+    TFResource, detect_format, parse_raw_flat, parse_raw_multi_stack, parse_raw_state, parse_state,
+)
 from ..schema.infracost import Breakdown, CostComponent, InfracostOutput, Project, Resource
 
 _ENGINE_MAP = {
@@ -2809,3 +2811,80 @@ def build_multi_project_output(resources_by_project: dict[str, list[Resource]]) 
             "totalUnsupportedResources": total_detected - total_supported - total_no_price,
         },
     )
+
+
+def price_terraform_json(data: dict, region: str) -> InfracostOutput:
+    """
+    Shared format-detection-and-price entry point for a `terraform show
+    -json` plan/state, a raw state export, or a combined multi-stack/flat
+    export -- the same autodetection `price-state` (cli.py) uses, minus its
+    own within-file prior/planned diff (`bucksawz forecast` diffs two
+    independently-generated datasets instead, see `find_new_resources`).
+    """
+    fmt = detect_format(data)
+    if fmt in ("raw_multi_stack", "raw_flat"):
+        by_stack = parse_raw_multi_stack(data) if fmt == "raw_multi_stack" else parse_raw_flat(data)
+        priced_by_stack = {stack: price_resources(tfs, region) for stack, tfs in by_stack.items()}
+        return build_multi_project_output(priced_by_stack)
+    if fmt == "raw_state":
+        priced = price_resources(parse_raw_state(data), region)
+    else:
+        priced = price_resources(parse_state(data), region)
+    return build_output(priced, region)
+
+
+def find_new_resources(
+    actual: InfracostOutput, proposed: InfracostOutput
+) -> dict[str, list[Resource]]:
+    """
+    Resources present in a `proposed` project with no same-named counterpart
+    in the matching `actual` project (matched by project name) -- the
+    not-yet-deployed set `bucksawz forecast`'s extrapolate option estimates
+    cost for. A project only in `proposed` (a whole new stack) counts all of
+    its resources as new. Returns {project_name: [new Resource, ...]},
+    omitting projects with nothing new.
+    """
+    actual_by_project = {p.name: p for p in actual.projects}
+    out: dict[str, list[Resource]] = {}
+    for p in proposed.projects:
+        if not p.breakdown:
+            continue
+        prior = actual_by_project.get(p.name)
+        prior_names = (
+            {r.name for r in prior.breakdown.resources} if prior and prior.breakdown else set()
+        )
+        new = [r for r in p.breakdown.resources if r.name not in prior_names]
+        if new:
+            out[p.name] = new
+    return out
+
+
+def extrapolate_by_resource_type(
+    actual: InfracostOutput, new_by_project: dict[str, list[Resource]]
+) -> dict[str, dict[str, Optional[float]]]:
+    """
+    Estimate monthly cost for not-yet-deployed resources by averaging
+    `total_monthly_cost()` across already-deployed resources of the same
+    Terraform type, across every actual project -- the coarsest possible
+    forecast, but it needs nothing beyond what's already priced today.
+    Unsupported/no-price resources are excluded from the average (they'd
+    silently drag a real price down toward zero); a type with no priced,
+    deployed instance to learn from gets None rather than a guess.
+    Returns {project_name: {resource_name: estimated_monthly_cost | None}}.
+    """
+    samples_by_type: dict[str, list[float]] = {}
+    for p in actual.projects:
+        if not p.breakdown:
+            continue
+        for r in p.breakdown.resources:
+            if r.is_supported and not r.no_price:
+                samples_by_type.setdefault(r.resource_type, []).append(r.total_monthly_cost())
+
+    result: dict[str, dict[str, Optional[float]]] = {}
+    for project, resources in new_by_project.items():
+        estimates: dict[str, Optional[float]] = {}
+        for r in resources:
+            samples = samples_by_type.get(r.resource_type)
+            estimates[r.name] = (sum(samples) / len(samples)) if samples else None
+        result[project] = estimates
+    return result
