@@ -103,13 +103,16 @@ def enrich(
     """
     from .aws.costexplorer import enrich_output
     import json
-    output = InfracostOutput.from_file(input_path)
+    with open(input_path) as f:
+        raw = json.load(f)
+    output = InfracostOutput.from_dict(raw)
     cw_regions = (
         [r.strip() for r in cloudwatch_regions.split(",") if r.strip()]
         if cloudwatch_regions else None
     )
     enriched = enrich_output(
         output,
+        raw=raw,
         lookback_days=lookback_days,
         profile=aws_profile,
         region=aws_region,

@@ -573,6 +573,7 @@ def fetch_ec2_runtime_actuals(
 
 def enrich_output(
     output: InfracostOutput,
+    raw: Optional[dict] = None,
     lookback_days: int = 90,
     profile: Optional[str] = None,
     region: str = "us-east-1",
@@ -583,7 +584,18 @@ def enrich_output(
 ) -> dict:
     """
     Returns a dict (JSON-serialisable) that extends the infracost output
-    with a top-level 'historical' key containing Cost Explorer actuals.
+    with a top-level 'historical' key containing Cost Explorer actuals, plus
+    an 'estimatedMonthlyCost'/'historical' pair on each resource.
+
+    Pass `raw` (the original infracost JSON as a plain dict, e.g. from
+    `json.load`) to have this fully preserve it — costComponents,
+    subresources, pastBreakdown/diff, anything our `InfracostOutput` dataclass
+    doesn't model — and only add the new keys on top; `output` (parsed from
+    that same raw dict) is still used to walk resources for the CloudWatch/
+    estimate lookups. Without `raw` (e.g. some tests), a minimal dict is
+    rebuilt from `output` instead, which loses everything the dataclass
+    doesn't carry (costComponents, subresources chief among them) — real
+    callers should always pass `raw`.
 
     Results are cached for cache_ttl_days (default 7). Pass force_refresh=True
     to bypass the cache and re-fetch from AWS.
@@ -626,27 +638,34 @@ def enrich_output(
     if len(actuals_by_account) > 1:
         print(f"  [aws] {len(actuals_by_account)} accounts detected in consolidated billing")
 
-    result = {
-        "version": output.version,
-        "currency": output.currency,
-        "timeGenerated": output.time_generated,
-        "totalMonthlyCost": output.total_monthly_cost,
-        "historical": {
-            "lookbackDays": lookback_days,
-            "start": start,
-            "end": end,
-            "accounts": sorted(by_account_service.keys()),
-            "actualsByService": actuals_by_service,
-            "monthlyAverageByService": monthly_actuals,
-            "actualsByAccount": actuals_by_account,
-            "monthlyAverageByAccount": monthly_by_account,
-            "actualsByAccountService": by_account_service,
-            "accountAliases": account_aliases,
-            "forecastNextMonth": forecast,
-            "cacheTtlDays": cache_ttl_days,
-        },
-        "projects": [],
+    historical = {
+        "lookbackDays": lookback_days,
+        "start": start,
+        "end": end,
+        "accounts": sorted(by_account_service.keys()),
+        "actualsByService": actuals_by_service,
+        "monthlyAverageByService": monthly_actuals,
+        "actualsByAccount": actuals_by_account,
+        "monthlyAverageByAccount": monthly_by_account,
+        "actualsByAccountService": by_account_service,
+        "accountAliases": account_aliases,
+        "forecastNextMonth": forecast,
+        "cacheTtlDays": cache_ttl_days,
     }
+
+    if raw is not None:
+        import copy
+        result = copy.deepcopy(raw)
+        result["historical"] = historical
+    else:
+        result = {
+            "version": output.version,
+            "currency": output.currency,
+            "timeGenerated": output.time_generated,
+            "totalMonthlyCost": output.total_monthly_cost,
+            "historical": historical,
+            "projects": [],
+        }
 
     # CloudWatch usage-based enrichment
     cw_actuals: dict[str, dict] = {}
@@ -681,19 +700,37 @@ def enrich_output(
         if estimates:
             print(f"  [estimate] computed estimates for {len(estimates)} resources")
 
-    for p in output.projects:
-        proj_dict = {
-            "name": p.name,
-            "metadata": p.metadata,
-            "monthlyCost": p.monthly_cost(),
-            "resources": [],
-        }
-        if p.breakdown:
-            for r in p.breakdown.resources:
-                proj_dict["resources"].append(
-                    _enrich_resource(r, monthly_actuals, cw_actuals, estimates)
-                )
-        result["projects"].append(proj_dict)
+    if raw is not None:
+        for pi, p in enumerate(output.projects):
+            if not p.breakdown:
+                continue
+            try:
+                res_dicts = result["projects"][pi]["breakdown"]["resources"]
+            except (KeyError, IndexError, TypeError):
+                continue
+            for ri, r in enumerate(p.breakdown.resources):
+                if ri >= len(res_dicts):
+                    break
+                cw = cw_actuals.get(r.name)
+                res_dicts[ri]["estimatedMonthlyCost"] = estimates.get(r.name)
+                res_dicts[ri]["historical"] = {
+                    "actualMonthlyServiceTotal": monthly_actuals.get(_SVC_MAP.get(r.aws_service())),
+                    "cloudwatchActuals": cw or None,
+                }
+    else:
+        for p in output.projects:
+            proj_dict = {
+                "name": p.name,
+                "metadata": p.metadata,
+                "monthlyCost": p.monthly_cost(),
+                "resources": [],
+            }
+            if p.breakdown:
+                for r in p.breakdown.resources:
+                    proj_dict["resources"].append(
+                        _enrich_resource(r, monthly_actuals, cw_actuals, estimates)
+                    )
+            result["projects"].append(proj_dict)
 
     return result
 

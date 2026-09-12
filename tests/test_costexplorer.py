@@ -1,5 +1,6 @@
 """Tests for the Cost Explorer data-transfer actuals fetcher (layer 3 of
 data-transfer estimation: Cost Explorer supersedes --usage-file)."""
+import json
 import pytest
 from bucksawz.aws import costexplorer
 from bucksawz.schema.infracost import InfracostOutput
@@ -265,3 +266,50 @@ def test_enrich_output_respects_explicit_cloudwatch_regions(monkeypatch):
         output, region="us-east-1", cloudwatch_regions=["us-east-1", "eu-west-1"]
     )
     assert captured["region"] == ["us-east-1", "eu-west-1"]
+
+
+# ── enrich_output preserves the full raw JSON (costComponents, subresources) ──
+
+
+def test_enrich_output_with_raw_preserves_cost_components_and_reparses(monkeypatch):
+    """enrich_output(raw=...) must not drop costComponents/subresources, and its
+    result must still be a valid infracost JSON (InfracostOutput.from_dict can
+    walk it and finds the same resources) -- regression test for a bug where the
+    enriched JSON was smaller than the input because resources were rebuilt from
+    a stripped-down dict instead of the original."""
+    captured = {}
+    _install_enrich_output_stubs(monkeypatch, captured)
+    raw = {
+        "version": "0.2", "currency": "USD", "timeGenerated": "2026-01-01T00:00:00Z",
+        "totalHourlyCost": None, "totalMonthlyCost": 10.0, "summary": {},
+        "projects": [{
+            "name": "proj", "metadata": {}, "summary": {},
+            "breakdown": {
+                "totalHourlyCost": None, "totalMonthlyCost": 10.0,
+                "resources": [{
+                    "name": "r1", "resourceType": "aws_instance", "tags": {},
+                    "monthlyCost": 10.0, "hourlyCost": None,
+                    "costComponents": [{
+                        "name": "Instance hours", "unit": "hours",
+                        "hourlyQuantity": 1, "monthlyQuantity": 730,
+                        "price": 0.01, "hourlyCost": 0.01, "monthlyCost": 7.3,
+                    }],
+                    "subresources": [],
+                }],
+            },
+        }],
+    }
+    output = InfracostOutput.from_dict(raw)
+    enriched = costexplorer.enrich_output(output, raw=raw, region="us-east-1")
+
+    assert len(json.dumps(enriched)) > len(json.dumps(raw))
+
+    reparsed = InfracostOutput.from_dict(enriched)
+    resources = reparsed.projects[0].breakdown.resources
+    assert len(resources) == 1
+    assert len(resources[0].cost_components) == 1
+    assert resources[0].cost_components[0].name == "Instance hours"
+
+    res_dict = enriched["projects"][0]["breakdown"]["resources"][0]
+    assert "estimatedMonthlyCost" in res_dict
+    assert "historical" in res_dict
