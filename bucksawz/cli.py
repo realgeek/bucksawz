@@ -425,3 +425,28 @@ def html_to_json(html_path, output_path):
     with open(output_path, "w") as f:
         json.dump(dataclasses.asdict(output), f, indent=2, default=str)
     click.echo(f"JSON written to {output_path}")
+
+
+def _collect_manual_sections(cmd, ctx, sections):
+    sections.append(f"{'=' * 70}\n{ctx.command_path}\n{'=' * 70}\n{ctx.get_help()}\n")
+    if isinstance(cmd, click.Group):
+        for name in sorted(cmd.commands):
+            sub = cmd.commands[name]
+            sub_ctx = click.Context(sub, info_name=name, parent=ctx)
+            _collect_manual_sections(sub, sub_ctx, sections)
+
+
+@cli.command()
+@click.pass_context
+def manual(ctx):
+    """Show the full manual: complete --help text for every command and subcommand, paged.
+
+    Click truncates each subcommand's one-line summary in `bucksawz --help` to fit
+    the terminal width, so longer descriptions get cut off with "...". This prints
+    the untruncated --help output for the top-level command and every subcommand
+    (including `cache`/`prices`'s own subcommands), piped through your pager.
+    """
+    root_ctx = click.Context(cli, info_name="bucksawz")
+    sections = []
+    _collect_manual_sections(cli, root_ctx, sections)
+    click.echo_via_pager("\n".join(sections))
