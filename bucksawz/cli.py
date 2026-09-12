@@ -293,7 +293,6 @@ def price_state(
     against and no data-transfer/Cost Explorer enrichment in this mode.
     """
     import sys
-    import dataclasses
     from .pricing.tf_state import (
         detect_format, is_plan, parse_prior, parse_raw_flat, parse_raw_multi_stack,
         parse_raw_state, parse_state,
@@ -317,7 +316,7 @@ def price_state(
 
         if json_output_path:
             with open(json_output_path, "w") as f:
-                json.dump(dataclasses.asdict(output), f, indent=2, default=str)
+                json.dump(output.to_dict(), f, indent=2, default=str)
             click.echo(f"JSON written to {json_output_path}")
 
         render(output, output_path, support_plan=support_plan)
@@ -394,7 +393,7 @@ def price_state(
 
     if json_output_path:
         with open(json_output_path, "w") as f:
-            json.dump(dataclasses.asdict(output), f, indent=2, default=str)
+            json.dump(output.to_dict(), f, indent=2, default=str)
         click.echo(f"JSON written to {json_output_path}")
 
     render(output, output_path, estimates=estimates or None, support_plan=support_plan)
@@ -429,15 +428,10 @@ def from_html(html_path, output_path):
 @click.option("--output", "-o", "output_path", default="infracost.json", show_default=True)
 def html_to_json(html_path, output_path):
     """Convert an existing infracost HTML report to JSON (for inspection or re-processing)."""
-    import json, dataclasses
+    import json
     output = parse_html(html_path)
-    # Simple dataclass → dict serialisation
-    def _ser(obj):
-        if dataclasses.is_dataclass(obj):
-            return dataclasses.asdict(obj)
-        raise TypeError(f"Not serialisable: {type(obj)}")
     with open(output_path, "w") as f:
-        json.dump(dataclasses.asdict(output), f, indent=2, default=str)
+        json.dump(output.to_dict(), f, indent=2, default=str)
     click.echo(f"JSON written to {output_path}")
 
 

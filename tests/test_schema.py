@@ -160,3 +160,25 @@ def test_aws_service_fallback_to_name():
 def test_from_json_string():
     output = InfracostOutput.from_json(json.dumps(MINIMAL_JSON))
     assert output.total_monthly_cost == 150.00
+
+
+def test_to_dict_round_trips_through_from_dict():
+    """to_dict() must produce genuine Infracost-schema (camelCase) JSON that
+    from_dict() can read back losslessly -- regression test for a bug where
+    cli.py used dataclasses.asdict() instead, which serialises Python's
+    snake_case field names and silently breaks re-parsing (costComponents,
+    resourceType, etc. all come back empty/missing)."""
+    output = InfracostOutput.from_dict(MINIMAL_JSON)
+    d = output.to_dict()
+
+    assert "resourceType" in d["projects"][0]["breakdown"]["resources"][0]
+    assert "costComponents" in d["projects"][0]["breakdown"]["resources"][0]
+    assert "totalMonthlyCost" in d
+    assert "resource_type" not in d["projects"][0]["breakdown"]["resources"][0]
+
+    reparsed = InfracostOutput.from_dict(d)
+    orig_resource = output.projects[0].breakdown.resources[0]
+    reparsed_resource = reparsed.projects[0].breakdown.resources[0]
+    assert reparsed_resource.resource_type == orig_resource.resource_type
+    assert len(reparsed_resource.cost_components) == len(orig_resource.cost_components)
+    assert reparsed.total_monthly_cost == output.total_monthly_cost

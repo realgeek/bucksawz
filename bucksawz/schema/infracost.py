@@ -38,6 +38,18 @@ class CostComponent:
             usage_based=usage_based,
         )
 
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "unit": self.unit,
+            "hourlyQuantity": self.hourly_quantity,
+            "monthlyQuantity": self.monthly_quantity,
+            "price": self.price,
+            "hourlyCost": self.hourly_cost,
+            "monthlyCost": self.monthly_cost,
+            "usageBased": self.usage_based,
+        }
+
 
 @dataclass
 class Resource:
@@ -68,6 +80,20 @@ class Resource:
             no_price=d.get("noPrice", False),
             no_price_reason=d.get("noPriceReason"),
         )
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "resourceType": self.resource_type,
+            "tags": self.tags,
+            "monthlyCost": self.monthly_cost,
+            "hourlyCost": self.hourly_cost,
+            "costComponents": [c.to_dict() for c in self.cost_components],
+            "subresources": [r.to_dict() for r in self.sub_resources],
+            "isSupported": self.is_supported,
+            "noPrice": self.no_price,
+            "noPriceReason": self.no_price_reason,
+        }
 
     def total_monthly_cost(self) -> float:
         if self.monthly_cost is not None:
@@ -154,6 +180,16 @@ class Project:
     def module_path(self) -> str:
         return self.metadata.get("path", self.name)
 
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "metadata": self.metadata,
+            "pastBreakdown": self.past_breakdown.to_dict() if self.past_breakdown else None,
+            "breakdown": self.breakdown.to_dict() if self.breakdown else None,
+            "diff": self.diff.to_dict() if self.diff else None,
+            "summary": self.summary,
+        }
+
 
 @dataclass
 class Breakdown:
@@ -170,6 +206,13 @@ class Breakdown:
             total_hourly_cost=float(thc) if thc is not None else None,
             total_monthly_cost=float(tmc) if tmc is not None else None,
         )
+
+    def to_dict(self) -> dict:
+        return {
+            "resources": [r.to_dict() for r in self.resources],
+            "totalHourlyCost": self.total_hourly_cost,
+            "totalMonthlyCost": self.total_monthly_cost,
+        }
 
 
 @dataclass
@@ -204,3 +247,14 @@ class InfracostOutput:
     def from_file(cls, path: str) -> "InfracostOutput":
         with open(path) as f:
             return cls.from_dict(json.load(f))
+
+    def to_dict(self) -> dict:
+        return {
+            "version": self.version,
+            "currency": self.currency,
+            "projects": [p.to_dict() for p in self.projects],
+            "totalHourlyCost": self.total_hourly_cost,
+            "totalMonthlyCost": self.total_monthly_cost,
+            "timeGenerated": self.time_generated,
+            "summary": self.summary,
+        }
