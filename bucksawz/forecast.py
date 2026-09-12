@@ -18,7 +18,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .forecast_config import ForecastConfig, VIEWER_FILENAME
-from .pricing.pricer import extrapolate_by_resource_type, find_new_resources, price_terraform_json
+from .pricing.pricer import (
+    apply_cost_explorer_actuals, extrapolate_by_resource_type, find_new_resources, price_terraform_json,
+)
 
 
 def run_command(command: str) -> dict:
@@ -37,13 +39,26 @@ def run_command(command: str) -> dict:
         raise RuntimeError(f"command did not produce valid JSON: {command}\n{e}") from e
 
 
-def build_forecast_payload(actual_data: dict, proposed_data: dict, region: str) -> dict:
-    """Pure function -- no I/O -- so it's the part worth unit testing directly."""
+def build_forecast_payload(
+    actual_data: dict, proposed_data: dict, region: str, ce_usage: dict | None = None,
+) -> dict:
+    """Pure function -- no I/O -- so it's the part worth unit testing directly.
+
+    `ce_usage` (optional, Phase 2) is the already-run
+    `cost_explorer.command`'s parsed JSON -- see forecast_config.py's
+    docstring for its schema. It's applied only to `actual` (it describes
+    real usage of what's really deployed) and also folds into the
+    per-resource-type averages `extrapolate_by_resource_type` uses, so a
+    not-yet-deployed resource's guess reflects real usage-based cost
+    (S3 storage, data transfer, ...) alongside its flat/base rate.
+    """
     actual = price_terraform_json(actual_data, region)
     proposed = price_terraform_json(proposed_data, region)
 
+    actual_estimates = apply_cost_explorer_actuals(actual, ce_usage, region) if ce_usage else {}
+
     new_by_project = find_new_resources(actual, proposed)
-    extrapolated = extrapolate_by_resource_type(actual, new_by_project)
+    extrapolated = extrapolate_by_resource_type(actual, new_by_project, actual_estimates)
 
     new_resources = [
         {
@@ -62,6 +77,7 @@ def build_forecast_payload(actual_data: dict, proposed_data: dict, region: str) 
         "actual": actual.to_dict(),
         "proposed": proposed.to_dict(),
         "newResources": new_resources,
+        "actualEstimates": actual_estimates,
     }
 
 
@@ -84,7 +100,8 @@ def run_forecast(config: ForecastConfig) -> Path:
     Returns the path of the JSON file written."""
     actual_data = run_command(config.actual_command)
     proposed_data = run_command(config.proposed_command)
-    payload = build_forecast_payload(actual_data, proposed_data, config.region)
+    ce_usage = run_command(config.cost_explorer_command) if config.cost_explorer_command else None
+    payload = build_forecast_payload(actual_data, proposed_data, config.region, ce_usage)
 
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -460,6 +460,13 @@ def forecast(config_path):
     static `bucksawz_viewer.html`. Run `bucksawz serve` in the same
     directory to view it -- browsers block a plain HTML file from fetching
     its own JSON sibling when opened directly from disk.
+
+    An optional `cost_explorer.command` in the config runs a third shell
+    command (your own aws-vault/SSO-wrapped Cost Explorer query, shaped
+    into bucksawz's usage schema -- see forecast_config.py) and folds real
+    S3/ELB/RDS/EC2/ElastiCache/data-transfer usage into the "actual" side,
+    including the per-resource-type averages used to extrapolate cost for
+    not-yet-deployed resources.
     """
     from .forecast_config import load_forecast_config
     from .forecast import run_forecast

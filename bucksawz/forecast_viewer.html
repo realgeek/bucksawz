@@ -177,6 +177,7 @@ tr.new-resource { background: #fffbeb; }
 
   function resourceTable(output) {
     const newMap = view === "proposed" ? newResourceLookup() : {};
+    const ceEstimates = view === "actual" ? (payload.actualEstimates || {}) : {};
     const table = document.createElement("table");
     const thead = document.createElement("thead");
     thead.innerHTML =
@@ -222,7 +223,14 @@ tr.new-resource { background: #fffbeb; }
             tdCost.innerHTML = '<span class="na">not deployed</span>';
           }
         } else {
-          tdCost.textContent = fmtMoney(resourceTotal(r)) || "$0.00";
+          const ceEst = Object.prototype.hasOwnProperty.call(ceEstimates, r.name) ? ceEstimates[r.name] : 0;
+          tdCost.textContent = fmtMoney(resourceTotal(r) + ceEst) || "$0.00";
+          if (ceEst) {
+            const badge = document.createElement("span");
+            badge.className = "badge estimated";
+            badge.textContent = "CE actual";
+            tdCost.append(badge);
+          }
         }
 
         tr.append(tdProject, tdName, tdType, tdCost);

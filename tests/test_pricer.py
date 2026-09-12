@@ -4,6 +4,7 @@ from pathlib import Path
 from bucksawz.pricing import db as price_db
 from bucksawz.pricing.estimator import estimate_resource_cost
 from bucksawz.pricing.pricer import (
+    apply_cost_explorer_actuals,
     apply_ec2_runtime_actuals,
     apply_elasticache_runtime_actuals,
     build_multi_project_output,
@@ -19,7 +20,7 @@ from bucksawz.pricing.pricer import (
     price_terraform_json,
 )
 from bucksawz.pricing.tf_state import TFResource
-from bucksawz.schema.infracost import Resource
+from bucksawz.schema.infracost import CostComponent, Resource
 
 
 @pytest.fixture
@@ -2067,3 +2068,66 @@ def test_extrapolate_by_resource_type_excludes_unsupported_and_no_price():
     estimates = extrapolate_by_resource_type(actual, new_by_project)
     # Only a1 (the sole supported, priced instance) contributes to the average.
     assert estimates["stack-a"]["aws_instance.a4"] == pytest.approx(10.0)
+
+
+def test_extrapolate_by_resource_type_folds_in_actual_estimates():
+    # A usage-based S3 bucket has monthly_cost=None -> total_monthly_cost()
+    # is 0 without a Cost Explorer actual folded in.
+    actual = build_multi_project_output({
+        "stack-a": [_resource("aws_s3_bucket.a1", resource_type="aws_s3_bucket", monthly_cost=None)],
+    })
+    new_by_project = {"stack-a": [_resource("aws_s3_bucket.a2", resource_type="aws_s3_bucket")]}
+    estimates = extrapolate_by_resource_type(
+        actual, new_by_project, actual_estimates={"aws_s3_bucket.a1": 50.0},
+    )
+    assert estimates["stack-a"]["aws_s3_bucket.a2"] == pytest.approx(50.0)
+
+
+def test_apply_cost_explorer_actuals_s3_storage(tmp_path):
+    bucket = Resource(
+        name="aws_s3_bucket.a1", resource_type="aws_s3_bucket", tags={},
+        monthly_cost=None, hourly_cost=None,
+        cost_components=[CostComponent(
+            name="Storage", unit="GB-months", hourly_quantity=None, monthly_quantity=None,
+            price=0.023, hourly_cost=None, monthly_cost=None, usage_based=True,
+        )],
+        sub_resources=[], is_supported=True, no_price=False,
+    )
+    output = build_multi_project_output({"stack-a": [bucket]})
+    estimates = apply_cost_explorer_actuals(output, {"s3_storage": {"storage_gb": 1000}}, "us-east-1")
+    assert estimates["aws_s3_bucket.a1"] == pytest.approx(23.0)
+
+
+def test_apply_cost_explorer_actuals_ec2_runtime_mutates_in_place():
+    instance = Resource(
+        name="aws_instance.a1", resource_type="aws_instance", tags={},
+        monthly_cost=0.0104 * 730, hourly_cost=0.0104,
+        cost_components=[CostComponent(
+            name="Instance usage", unit="hours", hourly_quantity=1, monthly_quantity=730,
+            price=0.0104, hourly_cost=0.0104, monthly_cost=0.0104 * 730, usage_based=False,
+        )],
+        sub_resources=[], is_supported=True, no_price=False,
+    )
+    output = build_multi_project_output({"stack-a": [instance]})
+    estimates = apply_cost_explorer_actuals(output, {"ec2_runtime": {"instance_hours_month": 100}}, "us-east-1")
+    assert estimates == {}
+    assert instance.monthly_cost == pytest.approx(0.0104 * 100)
+
+
+def test_apply_cost_explorer_actuals_data_transfer(tmp_path, monkeypatch):
+    db_path = tmp_path / "prices.db"
+    price_db.upsert("AWSDataTransfer", "us-east-1", "datatransfer:out:0", "GB", 0.09, db=db_path)
+    monkeypatch.setattr(price_db, "_DEFAULT_DB", db_path)
+
+    output = build_multi_project_output({"stack-a": []})
+    estimates = apply_cost_explorer_actuals(
+        output, {"data_transfer": {"internet_egress_gb_month": 1000}}, "us-east-1",
+    )
+    assert output.projects[0].breakdown.resources[0].resource_type == "aws_data_transfer"
+    dt_name = output.projects[0].breakdown.resources[0].name
+    assert estimates[dt_name] == pytest.approx(90.0)
+
+
+def test_apply_cost_explorer_actuals_empty_usage_is_noop():
+    actual = build_multi_project_output({"stack-a": [_resource("aws_instance.a1")]})
+    assert apply_cost_explorer_actuals(actual, {}, "us-east-1") == {}

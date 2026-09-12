@@ -64,6 +64,33 @@ def test_build_forecast_payload(tmp_path, monkeypatch):
     assert payload["newResources"] == []
 
 
+def test_build_forecast_payload_applies_ce_usage_to_actual_only(tmp_path, monkeypatch):
+    db_path = tmp_path / "prices.db"
+    price_db.upsert("AWSDataTransfer", "us-east-1", "datatransfer:out:0", "GB", 0.09, db=db_path)
+    monkeypatch.setattr(price_db, "_DEFAULT_DB", db_path)
+
+    actual_data = {"stack-a": {"resources": []}}
+    proposed_data = {"stack-a": {"resources": []}}
+    ce_usage = {"data_transfer": {"internet_egress_gb_month": 1000}}
+
+    payload = build_forecast_payload(actual_data, proposed_data, "us-east-1", ce_usage)
+
+    actual_resources = payload["actual"]["projects"][0]["breakdown"]["resources"]
+    assert any(r["resourceType"] == "aws_data_transfer" for r in actual_resources)
+    proposed_resources = payload["proposed"]["projects"][0]["breakdown"]["resources"]
+    assert not any(r["resourceType"] == "aws_data_transfer" for r in proposed_resources)
+    assert payload["actualEstimates"]
+    assert list(payload["actualEstimates"].values())[0] == pytest.approx(90.0)
+
+
+def test_build_forecast_payload_no_ce_usage_leaves_estimates_empty(tmp_path, monkeypatch):
+    db_path = tmp_path / "prices.db"
+    monkeypatch.setattr(price_db, "_DEFAULT_DB", db_path)
+
+    payload = build_forecast_payload({"stack-a": {"resources": []}}, {"stack-a": {"resources": []}}, "us-east-1")
+    assert payload["actualEstimates"] == {}
+
+
 def test_ensure_viewer_writes_bundled_template(tmp_path):
     viewer_path = ensure_viewer(tmp_path)
     assert viewer_path == tmp_path / "bucksawz_viewer.html"
@@ -101,3 +128,32 @@ def test_run_forecast_writes_json_manifest_and_viewer(tmp_path, monkeypatch):
     assert manifest["latest"] == output_path.name
 
     assert (output_dir / "bucksawz_viewer.html").exists()
+
+
+def test_run_forecast_runs_cost_explorer_command_when_configured(tmp_path, monkeypatch):
+    import bucksawz.forecast as forecast_mod
+
+    db_path = tmp_path / "prices.db"
+    monkeypatch.setattr(price_db, "_DEFAULT_DB", db_path)
+
+    output_dir = tmp_path / "reports"
+    config = ForecastConfig(
+        actual_command="echo actual",
+        proposed_command="echo proposed",
+        cost_explorer_command="echo ce",
+        output_dir=str(output_dir),
+    )
+
+    commands_run = []
+
+    def fake_run_command(command):
+        commands_run.append(command)
+        if command == "echo ce":
+            return {}
+        return {"stack-a": {"resources": []}}
+
+    monkeypatch.setattr(forecast_mod, "run_command", fake_run_command)
+
+    run_forecast(config)
+
+    assert commands_run == ["echo actual", "echo proposed", "echo ce"]

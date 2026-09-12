@@ -2860,7 +2860,9 @@ def find_new_resources(
 
 
 def extrapolate_by_resource_type(
-    actual: InfracostOutput, new_by_project: dict[str, list[Resource]]
+    actual: InfracostOutput,
+    new_by_project: dict[str, list[Resource]],
+    actual_estimates: Optional[dict[str, float]] = None,
 ) -> dict[str, dict[str, Optional[float]]]:
     """
     Estimate monthly cost for not-yet-deployed resources by averaging
@@ -2870,15 +2872,25 @@ def extrapolate_by_resource_type(
     Unsupported/no-price resources are excluded from the average (they'd
     silently drag a real price down toward zero); a type with no priced,
     deployed instance to learn from gets None rather than a guess.
+
+    `actual_estimates` (optional, see `apply_cost_explorer_actuals`) supplies
+    Cost Explorer-derived usage-based costs -- S3 storage, ELB LCUs, Aurora
+    storage, data transfer -- that never land in `total_monthly_cost()`
+    because those components have no fixed `monthly_cost` to sum. Folding
+    them in makes the per-type average reflect what a resource of that type
+    actually costs to run, not just its Infracost-style flat/base rate.
+
     Returns {project_name: {resource_name: estimated_monthly_cost | None}}.
     """
+    actual_estimates = actual_estimates or {}
     samples_by_type: dict[str, list[float]] = {}
     for p in actual.projects:
         if not p.breakdown:
             continue
         for r in p.breakdown.resources:
             if r.is_supported and not r.no_price:
-                samples_by_type.setdefault(r.resource_type, []).append(r.total_monthly_cost())
+                total = r.total_monthly_cost() + actual_estimates.get(r.name, 0.0)
+                samples_by_type.setdefault(r.resource_type, []).append(total)
 
     result: dict[str, dict[str, Optional[float]]] = {}
     for project, resources in new_by_project.items():
@@ -2888,3 +2900,70 @@ def extrapolate_by_resource_type(
             estimates[r.name] = (sum(samples) / len(samples)) if samples else None
         result[project] = estimates
     return result
+
+
+def apply_cost_explorer_actuals(
+    output: InfracostOutput, ce_usage: dict, region: str, db=None
+) -> dict[str, float]:
+    """
+    Apply Cost Explorer-derived usage to an already-priced InfracostOutput
+    (`bucksawz forecast`'s "actual" side), the same way `price-state
+    --aws-profile` does -- except fed from a pre-fetched dict rather than
+    calling boto3 directly. This is what lets `forecast`'s `cost_explorer`
+    config hook sidestep the aws-vault/--aws-profile SSO conflict
+    documented on `price-state`: the user's own wrapped CE command produces
+    `ce_usage`, and bucksawz never touches AWS credentials for it.
+
+    Expected shape (every key optional):
+        {
+          "data_transfer": {"internet_egress_gb_month": 5000, "inter_az_gb_month": 100},
+          "s3_storage": {"storage_gb": 500},
+          "elb_usage": {"lcu_hours_month": 200},
+          "rds_storage": {"storage_gb": 300},
+          "ec2_runtime": {"instance_hours_month": 400},
+          "elasticache_runtime": {"node_hours_month": 700},
+        }
+
+    EC2/ElastiCache runtime is applied by mutating the matching `Resource`s
+    in place (real average run-hours replace the flat 24/7 assumption).
+    Everything else has no fixed `monthly_cost` to mutate, so it's returned
+    as a flat {resource_name: estimated_monthly_cost} dict -- the same shape
+    render.py's Est. monthly column and `extrapolate_by_resource_type`'s
+    `actual_estimates` argument already expect. A synthetic Data Transfer
+    resource is appended to the first project when `data_transfer` usage is
+    given, mirroring `price-state`'s multi-stack handling (account-wide,
+    attributed once rather than per-project).
+    """
+    all_resources = [r for p in output.projects if p.breakdown for r in p.breakdown.resources]
+    estimates: dict[str, float] = {}
+
+    s3_usage = ce_usage.get("s3_storage")
+    if s3_usage:
+        estimates.update(estimate_s3_storage_cost(all_resources, s3_usage))
+
+    elb_usage = ce_usage.get("elb_usage")
+    if elb_usage:
+        estimates.update(estimate_elb_lcu_cost(all_resources, elb_usage))
+
+    rds_usage = ce_usage.get("rds_storage")
+    if rds_usage:
+        estimates.update(estimate_rds_storage_cost(all_resources, rds_usage))
+
+    ec2_usage = ce_usage.get("ec2_runtime") or {}
+    if ec2_usage.get("instance_hours_month"):
+        apply_ec2_runtime_actuals(all_resources, ec2_usage["instance_hours_month"])
+
+    cache_usage = ce_usage.get("elasticache_runtime") or {}
+    if cache_usage.get("node_hours_month"):
+        apply_elasticache_runtime_actuals(all_resources, cache_usage["node_hours_month"])
+
+    dt_usage = ce_usage.get("data_transfer")
+    if dt_usage and output.projects:
+        dt_resource = price_data_transfer(region, db=db)
+        if dt_resource is not None:
+            output.projects[0].breakdown.resources.append(dt_resource)
+            est = estimate_data_transfer_cost(region, {"data_transfer": dt_usage}, db=db)
+            if est is not None:
+                estimates[dt_resource.name] = est
+
+    return estimates

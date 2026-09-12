@@ -28,6 +28,20 @@ def test_load_forecast_config_happy_path(tmp_path):
     assert config.output_filename == "custom_{timestamp}.json"
 
 
+def test_load_forecast_config_with_cost_explorer_command(tmp_path):
+    config_path = tmp_path / "forecast.yml"
+    config_path.write_text(textwrap.dedent("""
+        actual:
+          command: "cmd-a"
+        proposed:
+          command: "cmd-b"
+        cost_explorer:
+          command: "aws-vault exec prod -- ./ce_usage.sh"
+    """))
+    config = load_forecast_config(str(config_path))
+    assert config.cost_explorer_command == "aws-vault exec prod -- ./ce_usage.sh"
+
+
 def test_load_forecast_config_defaults(tmp_path):
     config_path = tmp_path / "forecast.yml"
     config_path.write_text(textwrap.dedent("""
@@ -40,6 +54,7 @@ def test_load_forecast_config_defaults(tmp_path):
     assert config.region == "us-east-1"
     assert config.output_dir == "."
     assert config.output_filename == "bucksawz_{timestamp}.json"
+    assert config.cost_explorer_command is None
 
 
 def test_load_forecast_config_missing_actual_command(tmp_path):
