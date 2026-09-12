@@ -2768,6 +2768,7 @@ def build_multi_project_output(resources_by_project: dict[str, list[Resource]]) 
     """
     projects: list[Project] = []
     grand_total = 0.0
+    total_detected = total_supported = total_no_price = 0
     for name, resources in resources_by_project.items():
         monthly = sum(r.total_monthly_cost() for r in resources)
         grand_total += monthly
@@ -2778,6 +2779,9 @@ def build_multi_project_output(resources_by_project: dict[str, list[Resource]]) 
         )
         supported = sum(1 for r in resources if r.is_supported)
         no_price = sum(1 for r in resources if r.no_price)
+        total_detected += len(resources)
+        total_supported += supported
+        total_no_price += no_price
         projects.append(Project(
             name=name,
             metadata={"path": name, "type": "terraform_state"},
@@ -2798,5 +2802,10 @@ def build_multi_project_output(resources_by_project: dict[str, list[Resource]]) 
         total_hourly_cost=grand_total / 730 if grand_total else 0.0,
         total_monthly_cost=grand_total,
         time_generated=datetime.now(timezone.utc).isoformat(),
-        summary={},
+        summary={
+            "totalDetectedResources": total_detected,
+            "totalSupportedResources": total_supported,
+            "totalNoPriceResources": total_no_price,
+            "totalUnsupportedResources": total_detected - total_supported - total_no_price,
+        },
     )

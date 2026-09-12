@@ -6,6 +6,7 @@ from bucksawz.pricing.estimator import estimate_resource_cost
 from bucksawz.pricing.pricer import (
     apply_ec2_runtime_actuals,
     apply_elasticache_runtime_actuals,
+    build_multi_project_output,
     build_output,
     estimate_data_transfer_cost,
     estimate_elb_lcu_cost,
@@ -15,6 +16,7 @@ from bucksawz.pricing.pricer import (
     price_resources,
 )
 from bucksawz.pricing.tf_state import TFResource
+from bucksawz.schema.infracost import Resource
 
 
 @pytest.fixture
@@ -1961,3 +1963,34 @@ def test_apply_elasticache_runtime_actuals_overrides_flat_730h(tmp_db):
     updated = apply_elasticache_runtime_actuals(resources, 300)
     assert updated == ["aws_elasticache_cluster.thing"]
     assert resources[0].monthly_cost == pytest.approx(0.017 * 300)
+
+
+def _resource(name, no_price=False, unsupported=False):
+    return Resource(
+        name=name,
+        resource_type="aws_instance",
+        tags={},
+        monthly_cost=None if (no_price or unsupported) else 10.0,
+        hourly_cost=None,
+        cost_components=[],
+        sub_resources=[],
+        is_supported=not (no_price or unsupported),
+        no_price=no_price,
+    )
+
+
+def test_build_multi_project_output_aggregates_top_level_summary():
+    """Regression: build_multi_project_output used to hardcode summary={} at
+    the top level even though it computed correct per-project summaries --
+    the report's Estimated/Free/Detected/Unsupported resource cards read only
+    the top-level InfracostOutput.summary, so they always showed 0."""
+    resources_by_project = {
+        "stack-a": [_resource("a1"), _resource("a2", no_price=True)],
+        "stack-b": [_resource("b1", unsupported=True)],
+    }
+    output = build_multi_project_output(resources_by_project)
+
+    assert output.summary["totalDetectedResources"] == 3
+    assert output.summary["totalSupportedResources"] == 1
+    assert output.summary["totalNoPriceResources"] == 1
+    assert output.summary["totalUnsupportedResources"] == 1
