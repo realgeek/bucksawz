@@ -290,7 +290,10 @@ def price_state(
     (e.g. combined from multiple `terraform state pull`s), or a flat list of
     raw-state resource blocks each tagged with a `_stack` key. Each stack
     becomes its own project in one combined report. There's no plan to diff
-    against and no data-transfer/Cost Explorer enrichment in this mode.
+    against in this mode. Data transfer (--usage-file/--aws-profile) is
+    priced once for the whole account and attributed to the first stack;
+    the other Cost Explorer actuals (S3/ELB/RDS/EC2/ElastiCache) are still
+    single-project only and don't run here.
     """
     import sys
     from .pricing.tf_state import (
@@ -314,12 +317,34 @@ def price_state(
         output = build_multi_project_output(priced_by_stack)
         total_priced = sum(len(rs) for rs in priced_by_stack.values())
 
+        usage = None
+        if usage_file_path:
+            from .pricing.usage_file import load_usage_file
+            usage = load_usage_file(usage_file_path)
+
+        estimates = {}
+        if aws_profile:
+            from .aws.costexplorer import fetch_data_transfer_estimate
+            ce_usage = fetch_data_transfer_estimate(aws_profile, region)
+            if ce_usage:
+                usage = dict(usage or {})
+                usage["data_transfer"] = ce_usage
+                click.echo("Using Cost Explorer actuals for data transfer (supersedes --usage-file).")
+
+        dt_resource = price_data_transfer(region)
+        if dt_resource is not None and output.projects:
+            output.projects[0].breakdown.resources.append(dt_resource)
+            if usage:
+                est = estimate_data_transfer_cost(region, usage)
+                if est is not None:
+                    estimates[dt_resource.name] = est
+
         if json_output_path:
             with open(json_output_path, "w") as f:
                 json.dump(output.to_dict(), f, indent=2, default=str)
             click.echo(f"JSON written to {json_output_path}")
 
-        render(output, output_path, support_plan=support_plan)
+        render(output, output_path, estimates=estimates or None, support_plan=support_plan)
         click.echo(
             f"Priced {total_priced} resource(s) across {len(priced_by_stack)} stack(s) -> {output_path}"
         )
