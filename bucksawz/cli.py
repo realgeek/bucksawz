@@ -73,7 +73,14 @@ def report(input_path, output_path, support_plan):
 @click.option("--input", "-i", "input_path", required=True, help="Path to infracost JSON output")
 @click.option("--output", "-o", "output_path", default="enriched.json", show_default=True)
 @click.option("--lookback-days", default=90, show_default=True, help="Days of Cost Explorer history to pull")
-@click.option("--aws-profile", default=None, help="AWS profile name")
+@click.option(
+    "--aws-profile", default=None,
+    help="AWS profile name. Omit this if you're already running under aws-vault/an "
+         "assumed-role wrapper that exports credentials as env vars -- passing a named "
+         "profile makes boto3 resolve credentials from that profile's own config (SSO "
+         "cache included) instead of the env vars, which fails with a stale/missing SSO "
+         "token even though the wrapper's credentials are valid.",
+)
 @click.option("--aws-region", default="us-east-1", show_default=True, help="Region for Cost Explorer/Organizations API calls (cost totals are account-wide regardless).")
 @click.option(
     "--cloudwatch-regions", default=None,
@@ -250,7 +257,11 @@ def prices_info():
          "average, then trailing 30 days, then extrapolated month-to-date); the "
          "others use --ce-lookback-days. When usage is found, these supersede "
          "--usage-file's data_transfer values and override the 24/7 assumption for "
-         "EC2/ElastiCache with real account data.",
+         "EC2/ElastiCache with real account data. Omit this if you're already running "
+         "under aws-vault/an assumed-role wrapper that exports credentials as env vars "
+         "-- naming a profile makes boto3 resolve credentials (SSO cache included) from "
+         "that profile's own config instead of the env vars, which fails with a "
+         "stale/missing SSO token even though the wrapper's credentials are valid.",
 )
 @click.option(
     "--ce-lookback-days", default=30, show_default=True,
