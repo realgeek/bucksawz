@@ -40,6 +40,26 @@ def _date_range(lookback_days: int) -> tuple[str, str]:
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
+def _paginate_cost_and_usage(ce, **kwargs):
+    """
+    GetCostAndUsage has no botocore paginator config (it's absent from
+    ce/paginators-1.json — confirmed against botocore 1.43), so
+    ce.get_paginator("get_cost_and_usage") raises OperationNotPageableError.
+    Page it by hand via NextPageToken instead, yielding each raw response
+    the same way a botocore paginator page would look.
+    """
+    token = None
+    while True:
+        call_kwargs = dict(kwargs)
+        if token:
+            call_kwargs["NextPageToken"] = token
+        page = ce.get_cost_and_usage(**call_kwargs)
+        yield page
+        token = page.get("NextPageToken")
+        if not token:
+            break
+
+
 def _get_actuals_by_account_service(
     ce,
     start: str,
@@ -64,8 +84,8 @@ def _get_actuals_by_account_service(
 
     print(f"  [aws] fetching Cost Explorer actuals by account+service ({start}→{end})…")
     by_account: dict[str, dict[str, float]] = {}
-    paginator = ce.get_paginator("get_cost_and_usage")
-    for page in paginator.paginate(
+    for page in _paginate_cost_and_usage(
+        ce,
         TimePeriod={"Start": start, "End": end},
         Granularity="MONTHLY",
         Metrics=["UnblendedCost"],
@@ -188,8 +208,8 @@ def _sum_data_transfer_usage(ce, start: str, end: str, region: str) -> tuple[flo
     inter_az_gb = 0.0
     found = False
 
-    paginator = ce.get_paginator("get_cost_and_usage")
-    for page in paginator.paginate(
+    for page in _paginate_cost_and_usage(
+        ce,
         TimePeriod={"Start": start, "End": end},
         Granularity="MONTHLY",
         Metrics=["UsageQuantity"],
@@ -380,8 +400,8 @@ def _fetch_usage_by_type(
     months = max(lookback_days / 30, 1)
     totals: dict[str, float] = {}
 
-    paginator = ce.get_paginator("get_cost_and_usage")
-    for page in paginator.paginate(
+    for page in _paginate_cost_and_usage(
+        ce,
         TimePeriod={"Start": start, "End": end},
         Granularity="MONTHLY",
         Metrics=["UsageQuantity"],

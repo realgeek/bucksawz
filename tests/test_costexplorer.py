@@ -5,12 +5,12 @@ from bucksawz.aws import costexplorer
 from bucksawz.schema.infracost import InfracostOutput
 
 
-class _FakePaginator:
+class _FakeCE:
     def __init__(self, groups_by_period):
         self._groups_by_period = groups_by_period
 
-    def paginate(self, **kwargs):
-        yield {
+    def get_cost_and_usage(self, **kwargs):
+        return {
             "ResultsByTime": [
                 {"Groups": [
                     {"Keys": [key], "Metrics": {"UsageQuantity": {"Amount": str(amount)}}}
@@ -18,15 +18,6 @@ class _FakePaginator:
                 ]}
             ]
         }
-
-
-class _FakeCE:
-    def __init__(self, groups_by_period):
-        self._groups_by_period = groups_by_period
-
-    def get_paginator(self, name):
-        assert name == "get_cost_and_usage"
-        return _FakePaginator(self._groups_by_period)
 
 
 @pytest.fixture(autouse=True)
@@ -41,14 +32,20 @@ def _install(monkeypatch, groups_by_period):
 
 
 class _FakeCEQueue:
-    """Returns a different canned response for each successive get_paginator() call."""
+    """Returns a different canned response for each successive get_cost_and_usage() call."""
     def __init__(self, responses):
         self._responses = list(responses)
 
-    def get_paginator(self, name):
-        assert name == "get_cost_and_usage"
+    def get_cost_and_usage(self, **kwargs):
         groups = self._responses.pop(0) if self._responses else []
-        return _FakePaginator(groups)
+        return {
+            "ResultsByTime": [
+                {"Groups": [
+                    {"Keys": [key], "Metrics": {"UsageQuantity": {"Amount": str(amount)}}}
+                    for key, amount in groups
+                ]}
+            ]
+        }
 
 
 def _install_queue(monkeypatch, responses):
