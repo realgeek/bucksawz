@@ -461,3 +461,34 @@ def manual(ctx):
     sections = []
     _collect_manual_sections(cli, root_ctx, sections)
     click.echo_via_pager("\n".join(sections))
+
+
+def main():
+    """Console-script entry point: run the CLI, turning AWS auth/API failures into
+    a short message instead of a full stack trace. Click's own usage errors
+    (bad flags, --help, missing --input, etc.) are unaffected -- those are
+    already handled inside cli()/click before this ever sees them."""
+    import botocore.exceptions
+
+    try:
+        cli()
+    except (
+        botocore.exceptions.NoCredentialsError,
+        botocore.exceptions.ProfileNotFound,
+        botocore.exceptions.UnauthorizedSSOTokenError,
+        botocore.exceptions.TokenRetrievalError,
+        botocore.exceptions.SSOTokenLoadError,
+        botocore.exceptions.CredentialRetrievalError,
+        botocore.exceptions.PartialCredentialsError,
+    ) as e:
+        click.echo(f"AWS authentication failed: {e}", err=True)
+        click.echo(
+            "Check --aws-profile is correct, and that your credentials/SSO session "
+            "haven't expired. If you're already running under aws-vault or a similar "
+            "wrapper, omit --aws-profile -- see `bucksawz manual`.",
+            err=True,
+        )
+        raise SystemExit(1)
+    except botocore.exceptions.ClientError as e:
+        click.echo(f"AWS API call failed: {e}", err=True)
+        raise SystemExit(1)

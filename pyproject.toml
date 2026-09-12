@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-bucksawz = "bucksawz.cli:cli"
+bucksawz = "bucksawz.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["bucksawz"]
