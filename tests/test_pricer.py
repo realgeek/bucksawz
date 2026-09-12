@@ -4,8 +4,13 @@ from pathlib import Path
 from bucksawz.pricing import db as price_db
 from bucksawz.pricing.estimator import estimate_resource_cost
 from bucksawz.pricing.pricer import (
+    apply_ec2_runtime_actuals,
+    apply_elasticache_runtime_actuals,
     build_output,
     estimate_data_transfer_cost,
+    estimate_elb_lcu_cost,
+    estimate_rds_storage_cost,
+    estimate_s3_storage_cost,
     price_data_transfer,
     price_resources,
 )
@@ -1882,3 +1887,77 @@ def test_estimate_data_transfer_none_without_cached_price(empty_db):
         "us-east-1", {"data_transfer": {"internet_egress_gb_month": 1000}}, db=empty_db,
     )
     assert est is None
+
+
+# ── Cost Explorer actuals for the new usage categories ──────────────────────
+
+
+def test_estimate_s3_storage_cost_single_bucket(tmp_db):
+    tf = _tf("aws_s3_bucket", {})
+    resources = price_resources([tf], "us-east-1", db=tmp_db)
+    estimates = estimate_s3_storage_cost(resources, {"storage_gb": 1000})
+    assert estimates == {"aws_s3_bucket.thing": pytest.approx(1000 * 0.023)}
+
+
+def test_estimate_s3_storage_cost_splits_across_buckets(tmp_db):
+    tfs = [_tf("aws_s3_bucket", {}, address="aws_s3_bucket.a"), _tf("aws_s3_bucket", {}, address="aws_s3_bucket.b")]
+    resources = price_resources(tfs, "us-east-1", db=tmp_db)
+    estimates = estimate_s3_storage_cost(resources, {"storage_gb": 1000})
+    assert estimates == {
+        "aws_s3_bucket.a": pytest.approx(500 * 0.023),
+        "aws_s3_bucket.b": pytest.approx(500 * 0.023),
+    }
+
+
+def test_estimate_s3_storage_cost_empty_without_usage(tmp_db):
+    tf = _tf("aws_s3_bucket", {})
+    resources = price_resources([tf], "us-east-1", db=tmp_db)
+    assert estimate_s3_storage_cost(resources, {}) == {}
+
+
+def test_estimate_elb_lcu_cost(tmp_db):
+    tf = _tf("aws_lb", {"load_balancer_type": "application"})
+    resources = price_resources([tf], "us-east-1", db=tmp_db)
+    estimates = estimate_elb_lcu_cost(resources, {"lcu_hours_month": 100})
+    assert estimates == {"aws_lb.thing": pytest.approx(100 * 0.008)}
+
+
+def test_estimate_elb_lcu_cost_skips_classic_data_processed_component(tmp_db):
+    """Classic ELB's usage-based component bills GB, not LCUs — shouldn't match."""
+    tf = _tf("aws_elb", {})
+    resources = price_resources([tf], "us-east-1", db=tmp_db)
+    assert estimate_elb_lcu_cost(resources, {"lcu_hours_month": 100}) == {}
+
+
+def test_estimate_rds_storage_cost_aurora_only(tmp_db):
+    price_db.upsert("AmazonRDS", "us-east-1", "rds:db.r5.large:Aurora PostgreSQL:Single-AZ", "Hrs", 0.29, db=tmp_db)
+    aurora = _tf("aws_db_instance", {"instance_class": "db.r5.large", "engine": "aurora-postgresql"}, address="aws_db_instance.aurora")
+    standard = _tf("aws_db_instance", {"instance_class": "db.t3.medium", "engine": "postgres"}, address="aws_db_instance.standard")
+    resources = price_resources([aurora, standard], "us-east-1", db=tmp_db)
+    estimates = estimate_rds_storage_cost(resources, {"storage_gb": 100})
+    assert estimates == {"aws_db_instance.aurora": pytest.approx(100 * 0.10)}  # fallback rate, no cached price
+
+
+def test_apply_ec2_runtime_actuals_overrides_flat_730h(tmp_db):
+    tf = _tf("aws_instance", {"instance_type": "t3.micro"})
+    resources = price_resources([tf], "us-east-1", db=tmp_db)
+    updated = apply_ec2_runtime_actuals(resources, 200)
+    assert updated == ["aws_instance.thing"]
+    assert resources[0].monthly_cost == pytest.approx(0.0104 * 200)
+
+
+def test_apply_ec2_runtime_actuals_splits_across_instances(tmp_db):
+    tfs = [_tf("aws_instance", {"instance_type": "t3.micro"}, address="aws_instance.a"),
+           _tf("aws_instance", {"instance_type": "t3.micro"}, address="aws_instance.b")]
+    resources = price_resources(tfs, "us-east-1", db=tmp_db)
+    apply_ec2_runtime_actuals(resources, 200)
+    assert resources[0].monthly_cost == pytest.approx(0.0104 * 100)
+    assert resources[1].monthly_cost == pytest.approx(0.0104 * 100)
+
+
+def test_apply_elasticache_runtime_actuals_overrides_flat_730h(tmp_db):
+    tf = _tf("aws_elasticache_cluster", {"node_type": "cache.t3.micro", "engine": "redis"})
+    resources = price_resources([tf], "us-east-1", db=tmp_db)
+    updated = apply_elasticache_runtime_actuals(resources, 300)
+    assert updated == ["aws_elasticache_cluster.thing"]
+    assert resources[0].monthly_cost == pytest.approx(0.017 * 300)

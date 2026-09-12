@@ -37,6 +37,11 @@ _ELB_LCU_PRICE = 0.008
 # region: flat approximate us-east-1 on-demand rate.
 _NAT_GATEWAY_HOURLY_RATE = 0.045
 
+# Fallback used only when the price cache has no rds:storage:aurora row for
+# the region (no fetcher populates this key yet): AWS's publicly documented
+# flat Aurora storage rate, most regions.
+_AURORA_STORAGE_GB_PRICE = 0.10
+
 # Fallbacks used only when the price cache has no AWSConfig rows for the
 # region: AWS's publicly documented flat/first-tier rates.
 _CONFIG_ITEM_PRICE = 0.003
@@ -302,13 +307,35 @@ def _price_rds_instance(tf: TFResource, region: str, db=None) -> Optional[Resour
         monthly_cost=monthly_cost,
         usage_based=False,
     )
+    comps = [comp]
+
+    # Aurora bills storage by actual data stored, unlike standard RDS storage
+    # (provisioned/flat, already derivable from `allocated_storage` — no
+    # separate component needed here). Size isn't knowable from config alone,
+    # same reasoning as _price_s3_bucket, so this stays usage-based with no
+    # quantity until Cost Explorer actuals fill it in (see
+    # costexplorer.fetch_rds_storage_actuals / estimate_rds_storage_cost).
+    if engine.startswith("Aurora"):
+        storage_row = price_db.get_price("AmazonRDS", region, "rds:storage:aurora", db=db)
+        storage_price = storage_row["price_usd"] if storage_row else _AURORA_STORAGE_GB_PRICE
+        comps.append(CostComponent(
+            name="Aurora storage",
+            unit="GB-months",
+            hourly_quantity=None,
+            monthly_quantity=None,
+            price=storage_price,
+            hourly_cost=None,
+            monthly_cost=None,
+            usage_based=True,
+        ))
+
     return Resource(
         name=tf.address,
         resource_type=tf.type,
         tags=values.get("tags") or {},
         monthly_cost=monthly_cost,
         hourly_cost=price,
-        cost_components=[comp],
+        cost_components=comps,
         sub_resources=[],
     )
 
@@ -1088,6 +1115,129 @@ def estimate_data_transfer_cost(region: str, usage: dict, db=None) -> Optional[f
         computed_any = True
 
     return round(total, 6) if computed_any else None
+
+
+def estimate_usage_from_actuals(
+    resources: list[Resource],
+    resource_types: tuple[str, ...],
+    component_name_contains: Optional[str],
+    total_quantity: float,
+) -> dict[str, float]:
+    """
+    Spread an account/service-wide Cost Explorer actual (e.g. total S3 GB
+    stored, total LCU-hours) evenly across every matching usage-based
+    component in this plan/state, the same "estimates" dict shape
+    estimate_data_transfer_cost's caller (price-state) already uses.
+
+    Cost Explorer only reports totals for the whole account/region/service,
+    not a per-resource breakdown, so this is exact when there's exactly one
+    matching resource and an approximation (equal split) when there are
+    several. Returns {} if nothing in `resources` matches.
+    """
+    matches: list[tuple[Resource, CostComponent]] = []
+    for r in resources:
+        if r.resource_type not in resource_types:
+            continue
+        for c in r.cost_components:
+            if not c.usage_based or c.price is None:
+                continue
+            if component_name_contains and component_name_contains not in c.name:
+                continue
+            matches.append((r, c))
+    if not matches:
+        return {}
+    per_resource_qty = total_quantity / len(matches)
+    return {r.name: c.price * per_resource_qty for r, c in matches}
+
+
+def estimate_s3_storage_cost(resources: list[Resource], ce_usage: dict) -> dict[str, float]:
+    """Real average GB stored (see costexplorer.fetch_s3_storage_actuals) applied to every bucket's storage component."""
+    storage_gb = ce_usage.get("storage_gb")
+    if not storage_gb:
+        return {}
+    return estimate_usage_from_actuals(resources, ("aws_s3_bucket",), None, storage_gb)
+
+
+def estimate_elb_lcu_cost(resources: list[Resource], ce_usage: dict) -> dict[str, float]:
+    """Real average LCU-hours (see costexplorer.fetch_elb_usage_actuals) applied to every ALB/NLB's capacity-unit component."""
+    lcu_hours = ce_usage.get("lcu_hours_month")
+    if not lcu_hours:
+        return {}
+    return estimate_usage_from_actuals(
+        resources, ("aws_lb", "aws_alb"), "capacity units", lcu_hours,
+    )
+
+
+def estimate_rds_storage_cost(resources: list[Resource], ce_usage: dict) -> dict[str, float]:
+    """Real average Aurora storage GB (see costexplorer.fetch_rds_storage_actuals) applied to every Aurora instance's storage component."""
+    storage_gb = ce_usage.get("storage_gb")
+    if not storage_gb:
+        return {}
+    return estimate_usage_from_actuals(
+        resources, ("aws_db_instance", "aws_rds_cluster_instance"), "storage", storage_gb,
+    )
+
+
+def apply_ec2_runtime_actuals(resources: list[Resource], instance_hours_month: float) -> list[str]:
+    """
+    Override _price_ec2_instance's flat 24/7 (730h) assumption with real
+    average run-hours from Cost Explorer (see
+    costexplorer.fetch_ec2_runtime_actuals). Splits the account-wide total
+    evenly across every `aws_instance` in this plan/state — exact for one
+    instance, an approximation for several. EBS sub-resource cost is left
+    alone (volumes bill by size, not instance runtime). Returns the names of
+    resources that were adjusted; callers should keep the 24/7 default when
+    this comes back empty (e.g. no matching instances, or Cost Explorer had
+    no usage).
+    """
+    updated = []
+    for r in resources:
+        if r.resource_type != "aws_instance" or not r.cost_components:
+            continue
+        comp = r.cost_components[0]
+        if comp.usage_based or not comp.hourly_cost:
+            continue
+        updated.append(r)
+    if not updated:
+        return []
+    hours = instance_hours_month / len(updated)
+    for r in updated:
+        comp = r.cost_components[0]
+        sub_cost = sum(s.total_monthly_cost() for s in r.sub_resources)
+        comp.monthly_quantity = hours
+        comp.monthly_cost = comp.hourly_cost * hours
+        r.monthly_cost = comp.monthly_cost + sub_cost
+    return [r.name for r in updated]
+
+
+def apply_elasticache_runtime_actuals(resources: list[Resource], node_hours_month: float) -> list[str]:
+    """
+    Override _price_elasticache's flat 24/7 (730h)-per-node assumption with
+    real average node run-hours from Cost Explorer (see
+    costexplorer.fetch_elasticache_runtime_actuals). Splits the account-wide
+    total evenly across every matching cluster/replication-group in this
+    plan/state. Returns the names of resources that were adjusted.
+    """
+    updated = []
+    for r in resources:
+        if r.resource_type not in ("aws_elasticache_cluster", "aws_elasticache_replication_group"):
+            continue
+        if not r.cost_components:
+            continue
+        comp = r.cost_components[0]
+        if comp.usage_based or not comp.price:
+            continue
+        updated.append(r)
+    if not updated:
+        return []
+    hours = node_hours_month / len(updated)
+    for r in updated:
+        comp = r.cost_components[0]
+        nodes = comp.hourly_quantity or 1.0
+        comp.monthly_quantity = nodes * hours
+        comp.monthly_cost = comp.price * nodes * hours
+        r.monthly_cost = comp.monthly_cost
+    return [r.name for r in updated]
 
 
 def _price_vpc_endpoint(tf: TFResource, region: str, db=None) -> Optional[Resource]:

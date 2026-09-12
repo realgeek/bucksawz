@@ -244,6 +244,206 @@ def fetch_data_transfer_actuals(
     return result
 
 
+def _fetch_usage_by_type(
+    cache_name: str,
+    service: str,
+    lookback_days: int,
+    profile: Optional[str],
+    region: str,
+    cache_ttl_days: int,
+) -> Optional[dict[str, float]]:
+    """
+    Shared plumbing for the CE-actuals fetchers below: paginate
+    GetCostAndUsage for `service` in `region`, grouped by USAGE_TYPE. Returns
+    the raw {usage_type: monthly_average_quantity} map, or None if the
+    service had no usage in the lookback window. Caching and the
+    classify-by-usage-type-substring step are left to each caller, since
+    those differ per service.
+    """
+    ce = _ce_client(profile, region)
+    start, end = _date_range(lookback_days)
+
+    key = cache_key(cache_name, profile or "default", region, start, end)
+    cached = cache_get(key, ttl_days=cache_ttl_days)
+    if cached is not None:
+        print(f"  [cache hit] {cache_name} ({start}→{end})")
+        return cached
+
+    print(f"  [aws] fetching Cost Explorer {cache_name} ({start}→{end})…")
+    months = max(lookback_days / 30, 1)
+    totals: dict[str, float] = {}
+
+    paginator = ce.get_paginator("get_cost_and_usage")
+    for page in paginator.paginate(
+        TimePeriod={"Start": start, "End": end},
+        Granularity="MONTHLY",
+        Metrics=["UsageQuantity"],
+        Filter={
+            "And": [
+                {"Dimensions": {"Key": "SERVICE", "Values": [service]}},
+                {"Dimensions": {"Key": "REGION", "Values": [region]}},
+            ]
+        },
+        GroupBy=[{"Type": "DIMENSION", "Key": "USAGE_TYPE"}],
+    ):
+        for period in page.get("ResultsByTime", []):
+            for group in period.get("Groups", []):
+                [usage_type] = group["Keys"]
+                qty = float(group["Metrics"]["UsageQuantity"]["Amount"])
+                totals[usage_type] = totals.get(usage_type, 0.0) + qty / months
+
+    if not totals:
+        return None
+    cache_put(key, totals)
+    return totals
+
+
+def fetch_s3_storage_actuals(
+    lookback_days: int,
+    profile: Optional[str],
+    region: str,
+    cache_ttl_days: int = _DEFAULT_TTL_DAYS,
+) -> Optional[dict[str, float]]:
+    """
+    Real average Standard-class storage volume from Cost Explorer, to feed
+    pricer._price_s3_bucket's usage-based storage component the same way
+    fetch_data_transfer_actuals feeds price_data_transfer.
+
+    Filters to SERVICE "Amazon Simple Storage Service", matching only the
+    plain "TimedStorage-ByteHrs" usage-type suffix — other storage classes
+    (Standard-IA, Glacier, Intelligent-Tiering, ...) use a different infix
+    ("TimedStorage-SIA-ByteHrs" etc.) and are excluded, matching
+    _price_s3_bucket's "Standard-class only" scope. Cost Explorer already
+    reports this metric as a GB-month average, not byte-hours needing
+    conversion, so no extra normalization is applied here.
+
+    NOTE: written without live Cost Explorer access — validate the usage-type
+    suffix against a real account with S3 spend before trusting the numbers.
+    """
+    totals = _fetch_usage_by_type(
+        "ce_s3_storage_usage", "Amazon Simple Storage Service",
+        lookback_days, profile, region, cache_ttl_days,
+    )
+    if totals is None:
+        return None
+    storage_gb = sum(v for k, v in totals.items() if k.endswith("TimedStorage-ByteHrs"))
+    if storage_gb <= 0:
+        return None
+    return {"storage_gb": storage_gb}
+
+
+def fetch_elb_usage_actuals(
+    lookback_days: int,
+    profile: Optional[str],
+    region: str,
+    cache_ttl_days: int = _DEFAULT_TTL_DAYS,
+) -> Optional[dict[str, float]]:
+    """
+    Real average load-balancer usage from Cost Explorer: LCU-hours for
+    ALB/NLB (usage type containing "LCUUsage"), to feed pricer._price_lb's
+    "Load balancer capacity units" component.
+
+    NOTE: written without live Cost Explorer access — validate the usage-type
+    substring against a real account with ELB spend before trusting the
+    numbers.
+    """
+    totals = _fetch_usage_by_type(
+        "ce_elb_usage", "Amazon Elastic Load Balancing",
+        lookback_days, profile, region, cache_ttl_days,
+    )
+    if totals is None:
+        return None
+    lcu_hours = sum(v for k, v in totals.items() if "LCUUsage" in k)
+    if lcu_hours <= 0:
+        return None
+    return {"lcu_hours_month": lcu_hours}
+
+
+def fetch_rds_storage_actuals(
+    lookback_days: int,
+    profile: Optional[str],
+    region: str,
+    cache_ttl_days: int = _DEFAULT_TTL_DAYS,
+) -> Optional[dict[str, float]]:
+    """
+    Real average Aurora storage volume from Cost Explorer (usage type
+    containing "Aurora:StorageUsage"), to feed a usage-based Aurora storage
+    component in pricer._price_rds_instance. Standard (non-Aurora) RDS
+    storage is provisioned/flat and already derivable from `allocated_storage`
+    in the terraform config, so it isn't covered here.
+
+    NOTE: written without live Cost Explorer access — validate the usage-type
+    substring against a real account with Aurora spend before trusting the
+    numbers.
+    """
+    totals = _fetch_usage_by_type(
+        "ce_rds_storage_usage", "Amazon Relational Database Service",
+        lookback_days, profile, region, cache_ttl_days,
+    )
+    if totals is None:
+        return None
+    storage_gb = sum(v for k, v in totals.items() if "Aurora:StorageUsage" in k)
+    if storage_gb <= 0:
+        return None
+    return {"storage_gb": storage_gb}
+
+
+def fetch_elasticache_runtime_actuals(
+    lookback_days: int,
+    profile: Optional[str],
+    region: str,
+    cache_ttl_days: int = _DEFAULT_TTL_DAYS,
+) -> Optional[dict[str, float]]:
+    """
+    Real average node run-hours from Cost Explorer (usage type containing
+    "NodeUsage"), to replace pricer._price_elasticache's flat 24/7 (730h)
+    assumption for clusters that aren't always running.
+
+    NOTE: written without live Cost Explorer access — validate the usage-type
+    substring against a real account with ElastiCache spend before trusting
+    the numbers.
+    """
+    totals = _fetch_usage_by_type(
+        "ce_elasticache_usage", "Amazon ElastiCache",
+        lookback_days, profile, region, cache_ttl_days,
+    )
+    if totals is None:
+        return None
+    node_hours = sum(v for k, v in totals.items() if "NodeUsage" in k)
+    if node_hours <= 0:
+        return None
+    return {"node_hours_month": node_hours}
+
+
+def fetch_ec2_runtime_actuals(
+    lookback_days: int,
+    profile: Optional[str],
+    region: str,
+    cache_ttl_days: int = _DEFAULT_TTL_DAYS,
+) -> Optional[dict[str, float]]:
+    """
+    Real average on-demand instance run-hours from Cost Explorer (usage type
+    containing "BoxUsage" — excludes Spot/Reserved/Dedicated variants, which
+    use different usage-type prefixes), to replace pricer._price_ec2_instance's
+    flat 24/7 (730h) assumption when actual runtime is available. Falls back
+    to the 24/7 assumption (the existing default) when this returns None.
+
+    NOTE: written without live Cost Explorer access — validate the usage-type
+    substring against a real account with EC2 spend before trusting the
+    numbers.
+    """
+    totals = _fetch_usage_by_type(
+        "ce_ec2_runtime_usage", "Amazon Elastic Compute Cloud - Compute",
+        lookback_days, profile, region, cache_ttl_days,
+    )
+    if totals is None:
+        return None
+    instance_hours = sum(v for k, v in totals.items() if "BoxUsage" in k)
+    if instance_hours <= 0:
+        return None
+    return {"instance_hours_month": instance_hours}
+
+
 def enrich_output(
     output: InfracostOutput,
     lookback_days: int = 90,

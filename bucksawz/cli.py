@@ -279,7 +279,9 @@ def price_state(
         parse_raw_state, parse_state,
     )
     from .pricing.pricer import (
+        apply_ec2_runtime_actuals, apply_elasticache_runtime_actuals,
         build_multi_project_output, build_output, estimate_data_transfer_cost,
+        estimate_elb_lcu_cost, estimate_rds_storage_cost, estimate_s3_storage_cost,
         price_data_transfer, price_resources,
     )
 
@@ -320,15 +322,48 @@ def price_state(
         from .pricing.usage_file import load_usage_file
         usage = load_usage_file(usage_file_path)
 
+    estimates = {}
     if aws_profile:
-        from .aws.costexplorer import fetch_data_transfer_actuals
+        from .aws.costexplorer import (
+            fetch_data_transfer_actuals, fetch_ec2_runtime_actuals,
+            fetch_elasticache_runtime_actuals, fetch_elb_usage_actuals,
+            fetch_rds_storage_actuals, fetch_s3_storage_actuals,
+        )
         ce_usage = fetch_data_transfer_actuals(ce_lookback_days, aws_profile, region)
         if ce_usage:
             usage = dict(usage or {})
             usage["data_transfer"] = ce_usage
             click.echo("Using Cost Explorer actuals for data transfer (supersedes --usage-file).")
 
-    estimates = {}
+        resources = output.projects[0].breakdown.resources
+
+        s3_usage = fetch_s3_storage_actuals(ce_lookback_days, aws_profile, region)
+        if s3_usage:
+            estimates.update(estimate_s3_storage_cost(resources, s3_usage))
+            click.echo("Using Cost Explorer actuals for S3 storage.")
+
+        elb_usage = fetch_elb_usage_actuals(ce_lookback_days, aws_profile, region)
+        if elb_usage:
+            estimates.update(estimate_elb_lcu_cost(resources, elb_usage))
+            click.echo("Using Cost Explorer actuals for load balancer usage.")
+
+        rds_usage = fetch_rds_storage_actuals(ce_lookback_days, aws_profile, region)
+        if rds_usage:
+            estimates.update(estimate_rds_storage_cost(resources, rds_usage))
+            click.echo("Using Cost Explorer actuals for Aurora storage.")
+
+        ec2_usage = fetch_ec2_runtime_actuals(ce_lookback_days, aws_profile, region)
+        if ec2_usage:
+            updated = apply_ec2_runtime_actuals(resources, ec2_usage["instance_hours_month"])
+            if updated:
+                click.echo(f"Using Cost Explorer actuals for EC2 runtime ({len(updated)} instance(s), overrides 24/7 assumption).")
+
+        cache_usage = fetch_elasticache_runtime_actuals(ce_lookback_days, aws_profile, region)
+        if cache_usage:
+            updated = apply_elasticache_runtime_actuals(resources, cache_usage["node_hours_month"])
+            if updated:
+                click.echo(f"Using Cost Explorer actuals for ElastiCache runtime ({len(updated)} cluster(s), overrides 24/7 assumption).")
+
     dt_resource = price_data_transfer(region)
     if dt_resource is not None:
         output.projects[0].breakdown.resources.append(dt_resource)

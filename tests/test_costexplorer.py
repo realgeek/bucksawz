@@ -74,6 +74,56 @@ def test_fetch_data_transfer_actuals_averages_over_lookback_months(monkeypatch):
     assert result["internet_egress_gb_month"] == pytest.approx(3000.0)
 
 
+# ── New usage-category actuals fetchers ──────────────────────────────────────
+
+
+def test_fetch_s3_storage_actuals_matches_standard_class_only(monkeypatch):
+    _install(monkeypatch, [
+        ("USE1-TimedStorage-ByteHrs", 500.0),
+        ("USE1-TimedStorage-SIA-ByteHrs", 9999.0),
+    ])
+    result = costexplorer.fetch_s3_storage_actuals(30, None, "us-east-1")
+    assert result == {"storage_gb": pytest.approx(500.0)}
+
+
+def test_fetch_s3_storage_actuals_none_without_matching_usage(monkeypatch):
+    _install(monkeypatch, [("USE1-Requests-Tier1", 10.0)])
+    assert costexplorer.fetch_s3_storage_actuals(30, None, "us-east-1") is None
+
+
+def test_fetch_elb_usage_actuals_sums_lcu_hours(monkeypatch):
+    _install(monkeypatch, [
+        ("USE1-LCUUsage", 100.0),
+        ("USE1-LoadBalancerUsage", 730.0),
+    ])
+    result = costexplorer.fetch_elb_usage_actuals(30, None, "us-east-1")
+    assert result == {"lcu_hours_month": pytest.approx(100.0)}
+
+
+def test_fetch_rds_storage_actuals_matches_aurora_only(monkeypatch):
+    _install(monkeypatch, [
+        ("USE1-Aurora:StorageUsage", 50.0),
+        ("USE1-RDS:GP2-Storage", 200.0),
+    ])
+    result = costexplorer.fetch_rds_storage_actuals(30, None, "us-east-1")
+    assert result == {"storage_gb": pytest.approx(50.0)}
+
+
+def test_fetch_elasticache_runtime_actuals_sums_node_usage(monkeypatch):
+    _install(monkeypatch, [("USE1-NodeUsage:cache.m5.large", 365.0)])
+    result = costexplorer.fetch_elasticache_runtime_actuals(30, None, "us-east-1")
+    assert result == {"node_hours_month": pytest.approx(365.0)}
+
+
+def test_fetch_ec2_runtime_actuals_excludes_spot(monkeypatch):
+    _install(monkeypatch, [
+        ("USE1-BoxUsage:m5.large", 365.0),
+        ("USE1-SpotUsage:m5.large", 9999.0),
+    ])
+    result = costexplorer.fetch_ec2_runtime_actuals(30, None, "us-east-1")
+    assert result == {"instance_hours_month": pytest.approx(365.0)}
+
+
 # ── Account alias resolution ─────────────────────────────────────────────────
 
 
