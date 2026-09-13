@@ -18,12 +18,24 @@ class _FakeResult:
 def test_run_command_success(monkeypatch):
     import bucksawz.forecast as forecast_mod
 
-    def fake_run(command, shell, capture_output, text):
+    def fake_run(command, shell, capture_output, text, cwd):
         assert shell is True
+        assert cwd is None
         return _FakeResult(stdout='{"ok": true}')
 
     monkeypatch.setattr(forecast_mod.subprocess, "run", fake_run)
     assert run_command("some command") == {"ok": True}
+
+
+def test_run_command_passes_cwd(monkeypatch):
+    import bucksawz.forecast as forecast_mod
+
+    def fake_run(command, shell, capture_output, text, cwd):
+        assert cwd == "/srv/infra"
+        return _FakeResult(stdout='{"ok": true}')
+
+    monkeypatch.setattr(forecast_mod.subprocess, "run", fake_run)
+    assert run_command("some command", cwd="/srv/infra") == {"ok": True}
 
 
 def test_run_command_nonzero_exit(monkeypatch):
@@ -31,7 +43,7 @@ def test_run_command_nonzero_exit(monkeypatch):
 
     monkeypatch.setattr(
         forecast_mod.subprocess, "run",
-        lambda command, shell, capture_output, text: _FakeResult(returncode=1, stderr="boom"),
+        lambda command, shell, capture_output, text, cwd: _FakeResult(returncode=1, stderr="boom"),
     )
     with pytest.raises(RuntimeError, match="command failed"):
         run_command("some command")
@@ -42,7 +54,7 @@ def test_run_command_invalid_json(monkeypatch):
 
     monkeypatch.setattr(
         forecast_mod.subprocess, "run",
-        lambda command, shell, capture_output, text: _FakeResult(stdout="not json"),
+        lambda command, shell, capture_output, text, cwd: _FakeResult(stdout="not json"),
     )
     with pytest.raises(RuntimeError, match="did not produce valid JSON"):
         run_command("some command")
@@ -116,7 +128,7 @@ def test_run_forecast_writes_json_manifest_and_viewer(tmp_path, monkeypatch):
         {"stack-a": {"resources": []}},
         {"stack-a": {"resources": []}},
     ])
-    monkeypatch.setattr(forecast_mod, "run_command", lambda command: next(responses))
+    monkeypatch.setattr(forecast_mod, "run_command", lambda command, cwd=None: next(responses))
 
     output_path = run_forecast(config)
 
@@ -146,7 +158,7 @@ def test_run_forecast_runs_cost_explorer_command_when_configured(tmp_path, monke
 
     commands_run = []
 
-    def fake_run_command(command):
+    def fake_run_command(command, cwd=None):
         commands_run.append(command)
         if command == "echo ce":
             return {}
@@ -157,3 +169,30 @@ def test_run_forecast_runs_cost_explorer_command_when_configured(tmp_path, monke
     run_forecast(config)
 
     assert commands_run == ["echo actual", "echo proposed", "echo ce"]
+
+
+def test_run_forecast_passes_infra_dir_as_cwd(tmp_path, monkeypatch):
+    import bucksawz.forecast as forecast_mod
+
+    db_path = tmp_path / "prices.db"
+    monkeypatch.setattr(price_db, "_DEFAULT_DB", db_path)
+
+    output_dir = tmp_path / "reports"
+    config = ForecastConfig(
+        actual_command="echo actual",
+        proposed_command="echo proposed",
+        infra_dir="/srv/infra",
+        output_dir=str(output_dir),
+    )
+
+    cwds_seen = []
+
+    def fake_run_command(command, cwd=None):
+        cwds_seen.append(cwd)
+        return {"stack-a": {"resources": []}}
+
+    monkeypatch.setattr(forecast_mod, "run_command", fake_run_command)
+
+    run_forecast(config)
+
+    assert cwds_seen == ["/srv/infra", "/srv/infra"]

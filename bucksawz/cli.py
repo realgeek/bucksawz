@@ -441,9 +441,10 @@ def price_state(
 
 @cli.command("forecast")
 @click.option(
-    "--config", "config_path", default="bucksawz.yml", show_default=True,
+    "--config", "config_path", default=".bucksawz/config.yml", show_default=True,
     help="YAML config naming the 'actual' and 'proposed' commands to run. See "
-         "forecast_config.py for the schema.",
+         "forecast_config.py for the schema. Defaults to a hidden directory "
+         "so each infra repo you run this from keeps its own settings.",
 )
 def forecast(config_path):
     """Price what's actually deployed against what the whole project would
@@ -482,24 +483,48 @@ def forecast(config_path):
 
 
 @cli.command("serve")
-@click.option("--dir", "serve_dir", default=".", show_default=True, help="Directory to serve")
+@click.option(
+    "--dir", "serve_dir", default=None,
+    help="Directory to serve. Defaults to --config's output.dir (bucksawz.yml's if unset there too).",
+)
+@click.option(
+    "--config", "config_path", default=".bucksawz/config.yml", show_default=True,
+    help="Forecast config the settings panel (gear icon) reads and writes, and "
+         "'Run forecast now' uses. Defaults to a hidden directory so each infra "
+         "repo you run this from keeps its own settings; the panel creates it "
+         "on first save if it doesn't exist yet.",
+)
 @click.option("--port", default=8765, show_default=True)
 @click.option("--no-browser", is_flag=True, help="Don't automatically open a browser tab")
-def serve(serve_dir, port, no_browser):
-    """Serve a directory over local HTTP -- for viewing bucksawz_viewer.html.
+def serve(serve_dir, config_path, port, no_browser):
+    """Serve the forecast viewer over local HTTP, with a settings panel.
 
     A plain double-clicked HTML file can't fetch its own JSON sibling
     (browsers block fetch() from file:// URLs), so the forecast viewer needs
-    to be served instead of opened directly.
+    to be served instead of opened directly. Beyond static files, this also
+    exposes a small JSON API (see forecast_server.py) the viewer's gear icon
+    uses to view/edit --config's commands and infra directory, check the
+    local price cache, and trigger a fresh `bucksawz forecast` run --
+    without a second terminal.
     """
-    import functools
     import http.server
     import webbrowser
+    from pathlib import Path
+    from .forecast import ensure_viewer
+    from .forecast_config import load_output_dir
+    from .forecast_server import build_handler_class
 
-    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=serve_dir)
+    if serve_dir is None:
+        serve_dir = load_output_dir(config_path)
+
+    Path(serve_dir).mkdir(parents=True, exist_ok=True)
+    ensure_viewer(Path(serve_dir))
+
+    handler = build_handler_class(config_path, serve_dir)
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
     url = f"http://127.0.0.1:{port}/bucksawz_viewer.html"
     click.echo(f"Serving {serve_dir} at {url} (Ctrl+C to stop)")
+    click.echo(f"Settings panel administers {config_path}")
     if not no_browser:
         webbrowser.open(url)
     try:

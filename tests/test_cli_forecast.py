@@ -28,7 +28,7 @@ def test_cli_forecast_writes_json_manifest_and_viewer(tmp_path, monkeypatch):
         {"stack-a": {"resources": []}},
         {"stack-a": {"resources": []}},
     ])
-    monkeypatch.setattr(forecast_mod, "run_command", lambda command: next(responses))
+    monkeypatch.setattr(forecast_mod, "run_command", lambda command, cwd=None: next(responses))
 
     result = CliRunner().invoke(cli, ["forecast", "--config", str(config_path)])
 
@@ -39,6 +39,36 @@ def test_cli_forecast_writes_json_manifest_and_viewer(tmp_path, monkeypatch):
     latest_path = output_dir / manifest["latest"]
     assert latest_path.exists()
     assert (output_dir / "bucksawz_viewer.html").exists()
+
+
+def test_cli_forecast_defaults_to_dot_bucksawz_config(tmp_path, monkeypatch):
+    """`--config` defaults to `.bucksawz/config.yml` (relative to cwd) so each
+    infra repo you run `bucksawz forecast` from keeps its own settings."""
+    monkeypatch.chdir(tmp_path)
+    db_path = tmp_path / "prices.db"
+    monkeypatch.setattr(price_db, "_DEFAULT_DB", db_path)
+
+    config_dir = tmp_path / ".bucksawz"
+    config_dir.mkdir()
+    (config_dir / "config.yml").write_text(textwrap.dedent("""
+        actual:
+          command: "echo actual"
+        proposed:
+          command: "echo proposed"
+        output:
+          dir: reports
+    """))
+
+    responses = iter([
+        {"stack-a": {"resources": []}},
+        {"stack-a": {"resources": []}},
+    ])
+    monkeypatch.setattr(forecast_mod, "run_command", lambda command, cwd=None: next(responses))
+
+    result = CliRunner().invoke(cli, ["forecast"])
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "reports" / "bucksawz_manifest.json").exists()
 
 
 def test_cli_forecast_missing_config_command_fails_cleanly(tmp_path):

@@ -102,16 +102,94 @@ tr.new-resource { background: #fffbeb; }
 .na { color: #9ca3af; font-style: italic; }
 .empty { padding: 2rem; text-align: center; color: #6b7280; }
 .error { padding: 1rem 1.5rem; background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; border-radius: 8px; }
+.gear-btn {
+  background: none;
+  border: 1px solid #475569;
+  color: #f8fafc;
+  border-radius: 6px;
+  width: 2rem;
+  height: 2rem;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.gear-btn:hover { background: #334155; }
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.5);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 2rem 1rem;
+  overflow-y: auto;
+  z-index: 10;
+}
+.settings-panel {
+  background: #fff;
+  border-radius: 10px;
+  max-width: 640px;
+  width: 100%;
+  padding: 1.5rem;
+}
+.settings-panel h2 { margin: 0 0 1rem; font-size: 1.05rem; }
+.settings-panel h3 { font-size: 0.85rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; margin: 1.5rem 0 0.5rem; }
+.settings-panel .field { margin-bottom: 0.9rem; }
+.settings-panel label { display: block; font-size: 0.8rem; color: #374151; margin-bottom: 0.25rem; }
+.settings-panel input[type=text] {
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.settings-panel .hint { font-size: 0.72rem; color: #9ca3af; margin-top: 0.2rem; }
+.settings-panel .row { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-top: 1.25rem; }
+.btn {
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.btn-primary { background: #1e293b; color: #f8fafc; }
+.btn-secondary { background: #f1f5f9; color: #374151; }
+.btn:disabled { opacity: 0.6; cursor: default; }
+.settings-status { font-size: 0.8rem; }
+.settings-status.ok { color: #059669; }
+.settings-status.err { color: #991b1b; }
+.cache-table { width: 100%; font-size: 0.78rem; border-collapse: collapse; margin-top: 0.4rem; }
+.cache-table th, .cache-table td { text-align: left; padding: 0.3rem 0.5rem; border-bottom: 1px solid #f1f5f9; }
+.cache-summary { font-size: 0.8rem; color: #374151; }
+.close-btn {
+  float: right;
+  background: none;
+  border: none;
+  font-size: 1.1rem;
+  cursor: pointer;
+  color: #6b7280;
+}
 </style>
 </head>
 <body>
 <header>
   <h1>bucksawz forecast</h1>
-  <span class="generated" id="generated"></span>
+  <div style="display:flex; align-items:center; gap:0.75rem;">
+    <span class="generated" id="generated"></span>
+    <button class="gear-btn" id="gear-btn" title="Settings" aria-label="Settings">&#9881;</button>
+  </div>
 </header>
 <main id="app">
   <div class="empty">Loading&hellip;</div>
 </main>
+<div class="settings-overlay" id="settings-overlay" hidden>
+  <div class="settings-panel">
+    <button class="close-btn" id="settings-close" aria-label="Close">&times;</button>
+    <h2>Forecast settings</h2>
+    <div id="settings-body"><div class="empty">Loading&hellip;</div></div>
+  </div>
+</div>
 <script>
 (function () {
   const app = document.getElementById("app");
@@ -289,6 +367,179 @@ tr.new-resource { background: #fffbeb; }
     app.append(summaryCards(output));
     app.append(resourceTable(output));
   }
+
+  // --- Settings panel (gear icon): reads/writes forecast config and the
+  // price cache via the small JSON API forecast_server.py adds on top of
+  // plain static file serving (GET/POST /api/config, GET /api/cache,
+  // POST /api/run). Fetched lazily, only when the panel is opened, so a
+  // plain report view never depends on the API being present.
+
+  const overlay = document.getElementById("settings-overlay");
+  const settingsBody = document.getElementById("settings-body");
+
+  function fieldRow(id, labelText, value, hint) {
+    const field = document.createElement("div");
+    field.className = "field";
+    const label = document.createElement("label");
+    label.htmlFor = id;
+    label.textContent = labelText;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.id = id;
+    input.value = value || "";
+    field.append(label, input);
+    if (hint) {
+      const hintEl = document.createElement("div");
+      hintEl.className = "hint";
+      hintEl.textContent = hint;
+      field.append(hintEl);
+    }
+    return field;
+  }
+
+  function cacheSection(cache) {
+    const wrap = document.createElement("div");
+    const h3 = document.createElement("h3");
+    h3.textContent = "Price cache";
+    wrap.append(h3);
+
+    const summary = document.createElement("div");
+    summary.className = "cache-summary";
+    summary.textContent = cache.totalRows
+      ? cache.totalRows + " rows cached at " + cache.path
+      : "Empty (" + cache.path + ") -- run `bucksawz prices update`.";
+    wrap.append(summary);
+
+    if (cache.services && cache.services.length) {
+      const table = document.createElement("table");
+      table.className = "cache-table";
+      table.innerHTML = "<thead><tr><th>Service</th><th>Region</th><th>Rows</th><th>Last fetched</th></tr></thead>";
+      const tbody = document.createElement("tbody");
+      for (const row of cache.services) {
+        const tr = document.createElement("tr");
+        tr.innerHTML =
+          "<td>" + row.service + "</td><td>" + row.region + "</td><td>" + row.rows + "</td><td>" +
+          (row.last_fetched ? String(row.last_fetched).slice(0, 19) : "") + "</td>";
+        tbody.append(tr);
+      }
+      table.append(tbody);
+      wrap.append(table);
+    }
+    return wrap;
+  }
+
+  async function loadSettings() {
+    settingsBody.innerHTML = "";
+    settingsBody.append(Object.assign(document.createElement("div"), { className: "empty", textContent: "Loading…" }));
+    try {
+      const [configResp, cacheResp] = await Promise.all([
+        fetch("/api/config", { cache: "no-store" }),
+        fetch("/api/cache", { cache: "no-store" }),
+      ]);
+      const config = await configResp.json();
+      const cache = await cacheResp.json();
+
+      settingsBody.innerHTML = "";
+      const h3commands = document.createElement("h3");
+      h3commands.textContent = "Commands";
+      settingsBody.append(h3commands);
+      settingsBody.append(fieldRow("f-infra-dir", "Infra directory", config.infraDir,
+        "Working directory the commands below run in (leave blank to use wherever `bucksawz serve` was started)."));
+      settingsBody.append(fieldRow("f-region", "Region", config.region));
+      settingsBody.append(fieldRow("f-actual", "Actual command", config.actualCommand,
+        "Produces terraform show -json for what's currently deployed."));
+      settingsBody.append(fieldRow("f-proposed", "Proposed command", config.proposedCommand,
+        "Produces terraform show -json for the fully-deployed project."));
+      settingsBody.append(fieldRow("f-ce", "Cost Explorer command (optional)", config.costExplorerCommand,
+        "Outputs JSON usage data -- see forecast_config.py's docstring for the schema."));
+
+      const row = document.createElement("div");
+      row.className = "row";
+      const saveBtn = document.createElement("button");
+      saveBtn.className = "btn btn-primary";
+      saveBtn.textContent = "Save settings";
+      const runBtn = document.createElement("button");
+      runBtn.className = "btn btn-secondary";
+      runBtn.textContent = "Run forecast now";
+      const status = document.createElement("span");
+      status.className = "settings-status";
+      row.append(saveBtn, runBtn, status);
+      settingsBody.append(row);
+
+      settingsBody.append(cacheSection(cache));
+
+      function currentForm() {
+        return {
+          infraDir: document.getElementById("f-infra-dir").value,
+          region: document.getElementById("f-region").value,
+          actualCommand: document.getElementById("f-actual").value,
+          proposedCommand: document.getElementById("f-proposed").value,
+          costExplorerCommand: document.getElementById("f-ce").value,
+        };
+      }
+
+      saveBtn.addEventListener("click", async () => {
+        status.className = "settings-status";
+        status.textContent = "Saving…";
+        try {
+          const resp = await fetch("/api/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(currentForm()),
+          });
+          if (!resp.ok) throw new Error("save failed (" + resp.status + ")");
+          status.className = "settings-status ok";
+          status.textContent = "Saved.";
+        } catch (err) {
+          status.className = "settings-status err";
+          status.textContent = err.message;
+        }
+      });
+
+      runBtn.addEventListener("click", async () => {
+        runBtn.disabled = true;
+        status.className = "settings-status";
+        status.textContent = "Running… (this can take a while)";
+        try {
+          const resp = await fetch("/api/run", { method: "POST" });
+          const result = await resp.json();
+          if (!resp.ok || !result.ok) throw new Error(result.error || "run failed (" + resp.status + ")");
+          status.className = "settings-status ok";
+          status.textContent = "Forecast updated (" + result.path + "). Reloading…";
+          await load();
+          setTimeout(closeSettings, 800);
+        } catch (err) {
+          status.className = "settings-status err";
+          status.textContent = err.message;
+        } finally {
+          runBtn.disabled = false;
+        }
+      });
+    } catch (err) {
+      settingsBody.innerHTML = "";
+      const box = document.createElement("div");
+      box.className = "error";
+      box.textContent =
+        "Couldn't load settings: " + err.message +
+        ". The settings panel needs bucksawz serve's API, not a plain static file server.";
+      settingsBody.append(box);
+    }
+  }
+
+  function openSettings() {
+    overlay.hidden = false;
+    loadSettings();
+  }
+
+  function closeSettings() {
+    overlay.hidden = true;
+  }
+
+  document.getElementById("gear-btn").addEventListener("click", openSettings);
+  document.getElementById("settings-close").addEventListener("click", closeSettings);
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closeSettings();
+  });
 
   async function load() {
     try {

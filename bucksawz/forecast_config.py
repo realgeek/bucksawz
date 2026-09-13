@@ -2,7 +2,12 @@
 Config file for `bucksawz forecast`: shell commands that produce the
 "actual" (currently deployed) and "proposed" (fully deployed, e.g. with
 `not-ready`-tagged resources included) terraform state/plan JSON, plus
-where to write the priced comparison output. YAML:
+where to write the priced comparison output. Both `bucksawz forecast` and
+`bucksawz serve` default `--config` to `.bucksawz/config.yml` (relative to
+cwd, typically the infra repo itself) so each infra repo's settings live
+in their own hidden directory rather than sharing one path across
+projects; `save_forecast_form` creates that directory if it's missing.
+Pass `--config` explicitly to use a different path. YAML:
 
     actual:
       command: "tofu show -json actual.tfplan"
@@ -14,6 +19,7 @@ where to write the priced comparison output. YAML:
       filename: "bucksawz_{timestamp}.json"   # default shown
     cost_explorer:                             # optional (Phase 2)
       command: "aws-vault exec prod -- ./scripts/ce_usage.sh"
+    infra_dir: /path/to/terraform/project       # optional (Phase 3); cwd for all three commands
 
 Commands run through the user's own shell (not split into argv), since
 they're commonly wrapped in aws-vault/direnv/pipes -- the config file is
@@ -58,6 +64,7 @@ class ForecastConfig:
     output_filename: str = DEFAULT_OUTPUT_FILENAME
     timestamp_format: str = DEFAULT_TIMESTAMP_FORMAT
     cost_explorer_command: Optional[str] = None
+    infra_dir: Optional[str] = None
 
     def output_path(self, now: Optional[datetime] = None) -> Path:
         ts = (now or datetime.now(timezone.utc)).strftime(self.timestamp_format)
@@ -91,4 +98,74 @@ def load_forecast_config(path: str) -> ForecastConfig:
         output_dir=output.get("dir", "."),
         output_filename=output.get("filename", DEFAULT_OUTPUT_FILENAME),
         cost_explorer_command=cost_explorer.get("command") if isinstance(cost_explorer, dict) else None,
+        infra_dir=data.get("infra_dir"),
     )
+
+
+def _read_yaml_dict(path: str) -> dict:
+    try:
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def load_output_dir(path: str) -> str:
+    """The configured output.dir (default '.'), tolerating a missing file --
+    used by `bucksawz serve --dir`'s default so it matches wherever
+    `bucksawz forecast` actually writes, without requiring a fully valid
+    config (the settings panel may still be mid-setup)."""
+    data = _read_yaml_dict(path)
+    return (data.get("output") or {}).get("dir", ".")
+
+
+def load_forecast_form(path: str) -> dict:
+    """
+    Flat dict of the settings panel's editable fields (`bucksawz serve`'s
+    gear icon) -- unlike `load_forecast_config`, tolerates a missing file or
+    one still missing its required `actual`/`proposed` commands, since the
+    panel needs to render *before* the user has finished filling them in.
+    """
+    data = _read_yaml_dict(path)
+    return {
+        "actualCommand": (data.get("actual") or {}).get("command", ""),
+        "proposedCommand": (data.get("proposed") or {}).get("command", ""),
+        "costExplorerCommand": (data.get("cost_explorer") or {}).get("command", ""),
+        "region": data.get("region", "us-east-1"),
+        "infraDir": data.get("infra_dir", ""),
+    }
+
+
+def save_forecast_form(path: str, form: dict) -> dict:
+    """
+    Merge the settings panel's edited fields into the existing YAML config
+    and rewrite it, leaving any key the form doesn't know about (notably
+    `output.dir`/`output.filename`) untouched. This is a whole-file rewrite
+    -- comments/formatting in a hand-edited config are not preserved -- an
+    accepted tradeoff once a config is administered through the panel.
+    Returns the resulting form (same shape as `load_forecast_form`).
+    """
+    data = _read_yaml_dict(path)
+
+    if "actualCommand" in form:
+        data.setdefault("actual", {})["command"] = form["actualCommand"]
+    if "proposedCommand" in form:
+        data.setdefault("proposed", {})["command"] = form["proposedCommand"]
+    if "costExplorerCommand" in form:
+        if form["costExplorerCommand"]:
+            data.setdefault("cost_explorer", {})["command"] = form["costExplorerCommand"]
+        else:
+            data.pop("cost_explorer", None)
+    if "region" in form and form["region"]:
+        data["region"] = form["region"]
+    if "infraDir" in form:
+        if form["infraDir"]:
+            data["infra_dir"] = form["infraDir"]
+        else:
+            data.pop("infra_dir", None)
+
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+    return load_forecast_form(path)

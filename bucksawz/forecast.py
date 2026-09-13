@@ -23,14 +23,18 @@ from .pricing.pricer import (
 )
 
 
-def run_command(command: str) -> dict:
+def run_command(command: str, cwd: str | None = None) -> dict:
     """
     Run a shell command and parse its stdout as JSON. Runs through the
     user's own shell (not shlex.split) since these commands are commonly
     wrapped in aws-vault/direnv/pipes -- the config file is trusted,
     user-authored input, the same trust level as a Makefile target.
+
+    `cwd` (config's `infra_dir`) lets a relative terraform/tofu command
+    resolve against the actual infra project directory rather than wherever
+    `bucksawz forecast`/`serve` happened to be launched from.
     """
-    result = subprocess.run(command, shell=True, capture_output=True, text=True)
+    result = subprocess.run(command, shell=True, capture_output=True, text=True, cwd=cwd)
     if result.returncode != 0:
         raise RuntimeError(f"command failed ({result.returncode}): {command}\n{result.stderr}")
     try:
@@ -98,9 +102,12 @@ def run_forecast(config: ForecastConfig) -> Path:
     """Run both configured commands, price and compare the results, and
     write the timestamped JSON + manifest + viewer into config.output_dir.
     Returns the path of the JSON file written."""
-    actual_data = run_command(config.actual_command)
-    proposed_data = run_command(config.proposed_command)
-    ce_usage = run_command(config.cost_explorer_command) if config.cost_explorer_command else None
+    actual_data = run_command(config.actual_command, cwd=config.infra_dir)
+    proposed_data = run_command(config.proposed_command, cwd=config.infra_dir)
+    ce_usage = (
+        run_command(config.cost_explorer_command, cwd=config.infra_dir)
+        if config.cost_explorer_command else None
+    )
     payload = build_forecast_payload(actual_data, proposed_data, config.region, ce_usage)
 
     output_dir = Path(config.output_dir)
