@@ -1,6 +1,7 @@
 """CLI-level test for the `forecast` subcommand."""
 import json
 import textwrap
+from pathlib import Path
 
 from click.testing import CliRunner
 
@@ -41,10 +42,10 @@ def test_cli_forecast_writes_json_manifest_and_viewer(tmp_path, monkeypatch):
     assert (output_dir / "bucksawz_viewer.html").exists()
 
 
-def test_cli_forecast_defaults_to_dot_bucksawz_config(tmp_path, monkeypatch):
-    """`--config` defaults to `.bucksawz/config.yml` (relative to cwd) so each
-    infra repo you run `bucksawz forecast` from keeps its own settings."""
+def test_cli_forecast_defaults_to_home_bucksawz_config(tmp_path, monkeypatch):
+    """`--config` defaults to `~/.bucksawz/config.yml` (or .yaml)."""
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     db_path = tmp_path / "prices.db"
     monkeypatch.setattr(price_db, "_DEFAULT_DB", db_path)
 

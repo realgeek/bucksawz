@@ -3,11 +3,11 @@ Config file for `bucksawz forecast`: shell commands that produce the
 "actual" (currently deployed) and "proposed" (fully deployed, e.g. with
 `not-ready`-tagged resources included) terraform state/plan JSON, plus
 where to write the priced comparison output. Both `bucksawz forecast` and
-`bucksawz serve` default `--config` to `.bucksawz/config.yml` (relative to
-cwd, typically the infra repo itself) so each infra repo's settings live
-in their own hidden directory rather than sharing one path across
-projects; `save_forecast_form` creates that directory if it's missing.
-Pass `--config` explicitly to use a different path.
+`bucksawz serve` default `--config` to `~/.bucksawz/config.yml` (or
+`config.yaml`, if that's the one that exists -- see `resolve_config_path`);
+`save_forecast_form` creates that directory if it's missing. Per-repo
+settings live in named `repos:` sections of that one file. Pass `--config`
+explicitly to use a different path.
 
 Several infra repos can share one config: put settings common to all of them
 at the top level and each repo's own settings in a named subsection under
@@ -69,6 +69,7 @@ into this schema by their own script. See
 `pricing.pricer.apply_cost_explorer_actuals` for how each key is used.
 """
 from __future__ import annotations
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -103,6 +104,18 @@ class ForecastConfig:
         return Path(self.output_dir) / VIEWER_FILENAME
 
 
+def resolve_config_path(explicit: Optional[str] = None) -> str:
+    """`--config` if given, else ~/.bucksawz/config.yml or config.yaml
+    (whichever exists, .yml preferred; .yml is what gets created if neither)."""
+    if explicit:
+        return explicit
+    base = Path.home() / ".bucksawz"
+    for name in ("config.yml", "config.yaml"):
+        if (base / name).exists():
+            return str(base / name)
+    return str(base / "config.yml")
+
+
 def _merge_section(common: dict, repo: dict) -> dict:
     """Repo settings win over common ones. One-level deep merge for mapping
     values (so a repo can override just `output.dir` or `cost_explorer.command`
@@ -132,7 +145,7 @@ def _build_config(data: dict) -> ForecastConfig:
         output_dir=output.get("dir", "."),
         output_filename=output.get("filename", DEFAULT_OUTPUT_FILENAME),
         cost_explorer_command=cost_explorer.get("command") if isinstance(cost_explorer, dict) else None,
-        infra_dir=data.get("infra_dir"),
+        infra_dir=os.path.expanduser(data["infra_dir"]) if data.get("infra_dir") else None,
     )
 
 
@@ -189,8 +202,18 @@ def load_output_dir(path: str, repo: Optional[str] = None) -> str:
     used by `bucksawz serve --dir`'s default so it matches wherever
     `bucksawz forecast` actually writes, without requiring a fully valid
     config (the settings panel may still be mid-setup)."""
-    data = _resolve(_read_yaml_dict(path), repo)
-    return (data.get("output") or {}).get("dir", ".")
+    data = _read_yaml_dict(path)
+    if repo is None:
+        if data.get("repos"):
+            _resolve(data, None)  # raises: --repo is required
+        return (data.get("output") or {}).get("dir", ".")
+    # An alias not saved yet (no `repos:` section, or no such entry) is
+    # tolerated -- the settings panel creates it on first save -- and just
+    # resolves to the default <output.dir>/<repo> location.
+    entry = (data.get("repos") or {}).get(repo) or {}
+    if "dir" in (entry.get("output") or {}):
+        return entry["output"]["dir"]
+    return str(Path((data.get("output") or {}).get("dir", ".")) / repo)
 
 
 def _form_view(data: dict, repo: Optional[str]) -> dict:

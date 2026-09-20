@@ -441,10 +441,10 @@ def price_state(
 
 @cli.command("forecast")
 @click.option(
-    "--config", "config_path", default=".bucksawz/config.yml", show_default=True,
+    "--config", "config_path", default=None,
     help="YAML config naming the 'actual' and 'proposed' commands to run. See "
-         "forecast_config.py for the schema. Defaults to a hidden directory "
-         "so each infra repo you run this from keeps its own settings.",
+         "forecast_config.py for the schema. Defaults to ~/.bucksawz/config.yml "
+         "(or config.yaml if that's the one that exists).",
 )
 @click.option("--repo", "repo", default=None, help="Name of the entry under the config's `repos:` section to run (required when the config has one).")
 def forecast(config_path, repo):
@@ -473,6 +473,8 @@ def forecast(config_path, repo):
     from .forecast_config import load_forecast_config
     from .forecast import run_forecast
 
+    from .forecast_config import resolve_config_path
+    config_path = resolve_config_path(config_path)
     try:
         config = load_forecast_config(config_path, repo=repo)
         output_path = run_forecast(config)
@@ -486,14 +488,14 @@ def forecast(config_path, repo):
 @cli.command("serve")
 @click.option(
     "--dir", "serve_dir", default=None,
-    help="Directory to serve. Defaults to --config's output.dir (bucksawz.yml's if unset there too).",
+    help="Directory to serve. Defaults to --config's output.dir (the current directory if unset there too).",
 )
 @click.option(
-    "--config", "config_path", default=".bucksawz/config.yml", show_default=True,
+    "--config", "config_path", default=None,
     help="Forecast config the settings panel (gear icon) reads and writes, and "
-         "'Run forecast now' uses. Defaults to a hidden directory so each infra "
-         "repo you run this from keeps its own settings; the panel creates it "
-         "on first save if it doesn't exist yet.",
+         "'Run forecast now' uses. Defaults to ~/.bucksawz/config.yml (or "
+         "config.yaml if that's the one that exists); the panel creates it on "
+         "first save if it doesn't exist yet.",
 )
 @click.option("--repo", "repo", default=None, help="Name of the entry under the config's `repos:` section to serve and run (required when the config has one).")
 @click.option("--port", default=8765, show_default=True)
@@ -516,6 +518,8 @@ def serve(serve_dir, config_path, repo, port, no_browser):
     from .forecast_config import load_output_dir
     from .forecast_server import build_handler_class
 
+    from .forecast_config import resolve_config_path
+    config_path = resolve_config_path(config_path)
     if serve_dir is None:
         try:
             serve_dir = load_output_dir(config_path, repo=repo)

@@ -313,3 +313,29 @@ def test_form_save_creates_new_repo_entry(tmp_path):
     path = tmp_path / "c.yml"
     save_forecast_form(str(path), {"actualCommand": "a", "proposedCommand": "b"}, repo="workiac")
     assert load_forecast_config(str(path), repo="workiac").proposed_command == "b"
+
+
+def test_load_output_dir_tolerates_unsaved_repo(tmp_path):
+    flat = tmp_path / "flat.yml"
+    flat.write_text("output: {dir: reports}\nactual: {command: a}\nproposed: {command: b}\n")
+    assert load_output_dir(str(flat), repo="workiac") == str(Path("reports") / "workiac")
+    assert load_output_dir(str(tmp_path / "nope.yml"), repo="workiac") == str(Path(".") / "workiac")
+    assert load_output_dir(str(flat)) == "reports"
+
+
+def test_infra_dir_tilde_is_expanded(tmp_path):
+    path = tmp_path / "c.yml"
+    path.write_text("infra_dir: ~/infra\nactual: {command: a}\nproposed: {command: b}\n")
+    assert load_forecast_config(str(path)).infra_dir == str(Path.home() / "infra")
+
+
+def test_resolve_config_path(tmp_path, monkeypatch):
+    from bucksawz.forecast_config import resolve_config_path
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    assert resolve_config_path("/x/c.yml") == "/x/c.yml"
+    assert resolve_config_path() == str(tmp_path / ".bucksawz" / "config.yml")  # create target
+    (tmp_path / ".bucksawz").mkdir()
+    (tmp_path / ".bucksawz" / "config.yaml").write_text("")
+    assert resolve_config_path() == str(tmp_path / ".bucksawz" / "config.yaml")
+    (tmp_path / ".bucksawz" / "config.yml").write_text("")
+    assert resolve_config_path() == str(tmp_path / ".bucksawz" / "config.yml")  # .yml preferred
