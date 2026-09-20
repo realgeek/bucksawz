@@ -125,6 +125,7 @@ tr.new-resource { background: #fffbeb; }
   overflow-y: auto;
   z-index: 10;
 }
+.settings-overlay[hidden] { display: none; }  /* display:flex above would otherwise beat [hidden] */
 .settings-panel {
   background: #fff;
   border-radius: 10px;
