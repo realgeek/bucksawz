@@ -440,6 +440,12 @@ tr.new-resource { background: #fffbeb; }
       const cache = await cacheResp.json();
 
       settingsBody.innerHTML = "";
+      const scope = document.createElement("div");
+      scope.className = "hint";
+      scope.textContent = config.repo
+        ? `Editing repo "${config.repo}" -- saves go to its own section; blank optional fields fall back to the common settings.`
+        : "Editing the common (top-level) settings.";
+      settingsBody.append(scope);
       const h3commands = document.createElement("h3");
       h3commands.textContent = "Commands";
       settingsBody.append(h3commands);

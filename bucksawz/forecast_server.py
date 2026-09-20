@@ -60,12 +60,13 @@ def _cache_info() -> dict:
     return {"path": str(p), "totalRows": price_db.count(), "services": price_db.service_summary()}
 
 
-def build_handler_class(config_path: str, serve_dir: str) -> type[http.server.SimpleHTTPRequestHandler]:
+def build_handler_class(config_path: str, serve_dir: str, repo: str | None = None) -> type[http.server.SimpleHTTPRequestHandler]:
     """
     A fresh subclass per call (rather than functools.partial, as plain
     static serving uses) since `config_path`/`serve_dir` need to reach the
     request handlers as closed-over values, not constructor kwargs --
     `SimpleHTTPRequestHandler.__init__` only special-cases `directory`.
+    `repo` (serve's `--repo`) is the `repos:` entry "Run forecast now" uses.
     """
 
     class ForecastRequestHandler(http.server.SimpleHTTPRequestHandler):
@@ -96,7 +97,7 @@ def build_handler_class(config_path: str, serve_dir: str) -> type[http.server.Si
                 return
             path = urlparse(self.path).path
             if path == "/api/config":
-                return self._send_json(200, load_forecast_form(config_path))
+                return self._send_json(200, load_forecast_form(config_path, repo))
             if path == "/api/cache":
                 return self._send_json(200, _cache_info())
             return super().do_GET()
@@ -124,10 +125,10 @@ def build_handler_class(config_path: str, serve_dir: str) -> type[http.server.Si
                     form = json.loads(self.rfile.read(length) or b"{}")
                 except json.JSONDecodeError:
                     return self._send_json(400, {"error": "request body must be JSON"})
-                return self._send_json(200, save_forecast_form(config_path, form))
+                return self._send_json(200, save_forecast_form(config_path, form, repo))
             if path == "/api/run":
                 try:
-                    config = load_forecast_config(config_path)
+                    config = load_forecast_config(config_path, repo=repo)
                     output_path = run_forecast(config)
                 except (ValueError, RuntimeError, FileNotFoundError) as e:
                     return self._send_json(400, {"ok": False, "error": str(e)})

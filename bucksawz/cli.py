@@ -446,7 +446,8 @@ def price_state(
          "forecast_config.py for the schema. Defaults to a hidden directory "
          "so each infra repo you run this from keeps its own settings.",
 )
-def forecast(config_path):
+@click.option("--repo", "repo", default=None, help="Name of the entry under the config's `repos:` section to run (required when the config has one).")
+def forecast(config_path, repo):
     """Price what's actually deployed against what the whole project would
     look like fully deployed, and write a timestamped comparison JSON.
 
@@ -473,13 +474,13 @@ def forecast(config_path):
     from .forecast import run_forecast
 
     try:
-        config = load_forecast_config(config_path)
+        config = load_forecast_config(config_path, repo=repo)
         output_path = run_forecast(config)
     except (ValueError, RuntimeError, FileNotFoundError) as e:
         click.echo(str(e), err=True)
         raise SystemExit(1)
     click.echo(f"Forecast written to {output_path}")
-    click.echo(f"Run `bucksawz serve --dir {config.output_dir}` to view it.")
+    click.echo(f"Run `bucksawz serve{' --repo ' + repo if repo else ''}` to view it.")
 
 
 @cli.command("serve")
@@ -494,9 +495,10 @@ def forecast(config_path):
          "repo you run this from keeps its own settings; the panel creates it "
          "on first save if it doesn't exist yet.",
 )
+@click.option("--repo", "repo", default=None, help="Name of the entry under the config's `repos:` section to serve and run (required when the config has one).")
 @click.option("--port", default=8765, show_default=True)
 @click.option("--no-browser", is_flag=True, help="Don't automatically open a browser tab")
-def serve(serve_dir, config_path, port, no_browser):
+def serve(serve_dir, config_path, repo, port, no_browser):
     """Serve the forecast viewer over local HTTP, with a settings panel.
 
     A plain double-clicked HTML file can't fetch its own JSON sibling
@@ -515,12 +517,16 @@ def serve(serve_dir, config_path, port, no_browser):
     from .forecast_server import build_handler_class
 
     if serve_dir is None:
-        serve_dir = load_output_dir(config_path)
+        try:
+            serve_dir = load_output_dir(config_path, repo=repo)
+        except ValueError as e:
+            click.echo(str(e), err=True)
+            raise SystemExit(1)
 
     Path(serve_dir).mkdir(parents=True, exist_ok=True)
     ensure_viewer(Path(serve_dir))
 
-    handler = build_handler_class(config_path, serve_dir)
+    handler = build_handler_class(config_path, serve_dir, repo=repo)
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
     url = f"http://127.0.0.1:{port}/bucksawz_viewer.html"
     click.echo(f"Serving {serve_dir} at {url} (Ctrl+C to stop)")
