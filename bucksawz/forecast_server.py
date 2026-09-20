@@ -12,6 +12,11 @@ Makefile-target level (see forecast_config.py's docstring), so letting the
 browser both run and edit those commands over local HTTP doesn't raise the
 trust bar any further.
 
+Every request (GET/HEAD/POST) is rejected with 403 unless its Host header
+names a loopback hostname, to block DNS-rebinding attacks from web pages,
+and POSTs carrying an Origin header must be same-origin (Origin == Host),
+to block cross-site request forgery.
+
 Routes:
     GET  /api/config  -> current settings-panel form fields (JSON)
     POST /api/config  -> merge posted fields into the config file, return
@@ -30,6 +35,22 @@ from urllib.parse import urlparse
 from .forecast import run_forecast
 from .forecast_config import load_forecast_config, load_forecast_form, save_forecast_form
 from .pricing import db as price_db
+
+
+_ALLOWED_HOSTNAMES = {"127.0.0.1", "localhost", "[::1]"}
+
+
+def _host_allowed(host_header: str | None) -> bool:
+    """
+    DNS-rebinding defence: a page on an attacker's domain can be made to
+    resolve to 127.0.0.1, but the browser still sends the attacker's
+    hostname in `Host`. Only loopback hostnames are accepted (any port, so
+    this works whatever `--port` is); a missing Host header is rejected.
+    """
+    if not host_header:
+        return False
+    hostname = host_header if host_header.endswith("]") else host_header.rsplit(":", 1)[0]
+    return hostname.lower() in _ALLOWED_HOSTNAMES
 
 
 def _cache_info() -> dict:
@@ -59,7 +80,20 @@ def build_handler_class(config_path: str, serve_dir: str) -> type[http.server.Si
             self.end_headers()
             self.wfile.write(body)
 
+        def _host_ok(self) -> bool:
+            if _host_allowed(self.headers.get("Host")):
+                return True
+            self.send_error(403, "Forbidden: unexpected Host header")
+            return False
+
+        def do_HEAD(self):
+            if not self._host_ok():
+                return
+            return super().do_HEAD()
+
         def do_GET(self):
+            if not self._host_ok():
+                return
             path = urlparse(self.path).path
             if path == "/api/config":
                 return self._send_json(200, load_forecast_form(config_path))
@@ -67,7 +101,22 @@ def build_handler_class(config_path: str, serve_dir: str) -> type[http.server.Si
                 return self._send_json(200, _cache_info())
             return super().do_GET()
 
+        def _origin_ok(self) -> bool:
+            # Browsers always attach Origin to cross-origin POSTs; only a
+            # same-origin (loopback, same host:port) page may write. No
+            # Origin header means a non-browser client (curl), which isn't
+            # the threat this guards against.
+            origin = self.headers.get("Origin")
+            if origin is None:
+                return True
+            if urlparse(origin).netloc == self.headers.get("Host") and _host_allowed(self.headers.get("Host")):
+                return True
+            self.send_error(403, "Forbidden: cross-origin request")
+            return False
+
         def do_POST(self):
+            if not self._host_ok() or not self._origin_ok():
+                return
             path = urlparse(self.path).path
             if path == "/api/config":
                 length = int(self.headers.get("Content-Length", 0))

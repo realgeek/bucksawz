@@ -136,3 +136,50 @@ def test_static_file_still_served(server):
     status, body = _get(httpd, "/hello.txt")
     assert status == 200
     assert body == b"hi"
+
+
+def test_rejects_non_loopback_host_header(server):
+    httpd, _, _ = server
+    for method, path in (("GET", "/api/config"), ("POST", "/api/run"), ("GET", "/bucksawz_viewer.html")):
+        conn = http.client.HTTPConnection("127.0.0.1", httpd.server_address[1])
+        conn.request(method, path, headers={"Host": "evil.example.com"})
+        resp = conn.getresponse()
+        resp.read()
+        conn.close()
+        assert resp.status == 403
+
+
+def test_accepts_localhost_host_header(server):
+    httpd, _, _ = server
+    port = httpd.server_address[1]
+    conn = http.client.HTTPConnection("127.0.0.1", port)
+    conn.request("GET", "/api/config", headers={"Host": f"localhost:{port}"})
+    resp = conn.getresponse()
+    resp.read()
+    conn.close()
+    assert resp.status == 200
+
+
+def test_rejects_cross_origin_post(server):
+    httpd, config_path, _ = server
+    before = config_path.read_text()
+    port = httpd.server_address[1]
+    for origin in ("http://evil.example.com", f"http://localhost:{port + 1}"):
+        conn = http.client.HTTPConnection("127.0.0.1", port)
+        conn.request("POST", "/api/config", body='{"region": "x"}', headers={"Origin": origin})
+        resp = conn.getresponse()
+        resp.read()
+        conn.close()
+        assert resp.status == 403
+    assert config_path.read_text() == before
+
+
+def test_accepts_same_origin_post(server):
+    httpd, _, _ = server
+    port = httpd.server_address[1]
+    conn = http.client.HTTPConnection("127.0.0.1", port)
+    conn.request("POST", "/api/config", body="{}", headers={"Origin": f"http://127.0.0.1:{port}"})
+    resp = conn.getresponse()
+    resp.read()
+    conn.close()
+    assert resp.status == 200
