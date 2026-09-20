@@ -547,9 +547,52 @@ tr.new-resource { background: #fffbeb; }
     if (e.target === overlay) closeSettings();
   });
 
+  function showFirstRun() {
+    app.innerHTML = "";
+    const box = document.createElement("div");
+    box.className = "empty";
+    const msg = document.createElement("p");
+    msg.textContent =
+      "No forecast has been generated yet. Running one executes the actual and proposed commands " +
+      "from your settings (plus the Cost Explorer command, if set) and can take a while.";
+    const runBtn = document.createElement("button");
+    runBtn.className = "btn btn-primary";
+    runBtn.textContent = "Run forecast now";
+    const settingsBtn = document.createElement("button");
+    settingsBtn.className = "btn btn-secondary";
+    settingsBtn.style.marginLeft = "0.5rem";
+    settingsBtn.textContent = "Review settings first";
+    const status = document.createElement("p");
+    status.className = "settings-status";
+    box.append(msg, runBtn, settingsBtn, status);
+    app.append(box);
+
+    settingsBtn.addEventListener("click", openSettings);
+    runBtn.addEventListener("click", async () => {
+      runBtn.disabled = true;
+      status.className = "settings-status";
+      status.textContent = "Running… (this can take a while)";
+      try {
+        const resp = await fetch("/api/run", { method: "POST" });
+        const result = await resp.json();
+        if (!resp.ok || !result.ok) throw new Error(result.error || "run failed (" + resp.status + ")");
+        await load();
+      } catch (err) {
+        status.className = "settings-status err";
+        status.textContent = err.message + " -- check the commands in settings.";
+        runBtn.disabled = false;
+      }
+    });
+  }
+
   async function load() {
     try {
       const manifestResp = await fetch("bucksawz_manifest.json", { cache: "no-store" });
+      if (manifestResp.status === 404) {
+        // Served fine, but nothing has been written here yet: offer to run it.
+        showFirstRun();
+        return;
+      }
       if (!manifestResp.ok) throw new Error("could not read bucksawz_manifest.json (" + manifestResp.status + ")");
       const manifest = await manifestResp.json();
 
