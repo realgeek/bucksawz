@@ -25,6 +25,9 @@ Infracost's HTML report is a single flat scroll — no navigation, no charts, no
 - **Plan cost diffs** — what a plan does to the monthly bill, per resource
   (added / removed / changed), from either a Terraform plan or an Infracost diff
 - **HTML → JSON converter** — reconstruct an Infracost JSON schema from an existing HTML report
+- **Forecast: Actual vs. Proposed** — compare what's deployed today against a fully-deployed
+  project, extrapolate cost for not-yet-deployed resources, and browse it in a local viewer
+  (`bucksawz forecast` / `bucksawz serve`, see [below](#forecast-actual-vs-proposed-cost-comparison))
 
 ## Installation
 
@@ -82,6 +85,97 @@ bucksawz from-html infracost_report.html --output report.html
 # Or extract the JSON first for further processing
 bucksawz html-to-json infracost_report.html --output infracost.json
 ```
+
+## Forecast: Actual vs. Proposed cost comparison
+
+Compares what's actually deployed today against what a project would cost fully
+deployed (e.g. with `not-ready`-tagged Terraform/Terramate stacks included), and
+extrapolates a cost for anything not deployed yet by averaging already-deployed
+resources of the same type. This is a separate feature from `price-state`/`report`
+above — it doesn't need Infracost, and it's built around comparing two
+independently-generated `terraform show -json` datasets rather than pricing one.
+
+### Quickstart
+
+```bash
+# 1. Config: name the two commands that produce "actual" and "proposed" JSON.
+#    ~/.bucksawz/config.yml is the default path (--config for anywhere else).
+mkdir -p ~/.bucksawz && cat > ~/.bucksawz/config.yml <<'YAML'
+region: us-east-1
+output:
+  dir: ~/bucksawz-reports
+repos:
+  myrepo:
+    infra_dir: ~/infra/myrepo
+    actual:
+      command: "terraform show -json"
+    proposed:
+      command: "terraform plan -out=p && terraform show -json p"
+YAML
+
+# 2. Run it once from the CLI to check the commands work.
+bucksawz forecast --repo myrepo
+
+# 3. Serve the viewer (also lets the browser trigger runs from here on).
+bucksawz serve --repo myrepo
+```
+
+`serve` prints the URL it opens (default `http://127.0.0.1:8765/bucksawz_viewer.html`)
+and binds to loopback only. If nothing has been generated yet in that directory, the
+viewer offers a "Run forecast now" button instead of erroring. The gear icon opens a
+settings panel to view/edit the config and rerun without a second terminal.
+
+Expected output after a run: `bucksawz_<timestamp>.json`, `bucksawz_manifest.json`
+(points the viewer at the latest run), and `bucksawz_viewer.html`, all under
+`output.dir` (or `output.dir/<repo>/` when the config has a `repos:` section — see
+below). The viewer's Actual/Proposed toggle shows the priced resources on each side,
+plus an "Extrapolate cost" checkbox for not-yet-deployed ones.
+
+### One config, several repos
+
+Settings common to every repo go at the top level; a named entry under `repos:`
+overrides them for the one repo you're working on (`output`/`cost_explorer` merge
+key by key rather than replacing wholesale). `--repo NAME` is required on both
+`forecast` and `serve` whenever the config has a `repos:` section — there's no
+implicit default, even with only one repo defined. Output goes to
+`<output.dir>/<repo>/` unless the repo sets its own `output.dir`. See the example
+above and `forecast_config.py`'s docstring for the full merge rules.
+
+### Terramate / multi-stack infra: `combine-stacks`
+
+For a Terramate repo with multiple stacks (e.g. per-account/per-region), point
+`actual`/`proposed` at `bucksawz combine-stacks` instead of a single `terraform
+show -json`:
+
+```bash
+# actual: what's deployed now (read-only: tofu show, no credentials besides
+# whatever can read the state backend)
+bucksawz combine-stacks --mode state --no-tags not-ready --root ~/infra/myrepo
+
+# proposed: a fresh plan per stack (read-only: tofu plan -lock=false + show).
+# Each stack's own AWS account needs its own credentials -- there's no
+# assume_role wiring in a typical multi-account Terramate setup, so map
+# each stack directory to an aws-vault profile:
+bucksawz combine-stacks --mode plan --root ~/infra/myrepo \
+  --account-profile stacks/management=management \
+  --account-profile stacks/workloads/dev=dev \
+  --account-profile stacks/workloads/production=production
+```
+
+Only `terramate list`, `tofu show`, and `tofu plan -lock=false` ever run — never
+`apply`/`destroy`/`import`. Put the commands above straight into the config's
+`actual.command`/`proposed.command` (each stack must already be `tofu init`ed);
+the combined JSON they print is a `{stack_path: <show-json>}` document that both
+`bucksawz forecast` and `bucksawz price-state --input` understand directly, pricing
+one project per stack.
+
+### Cost Explorer actuals (optional)
+
+An optional third command, `cost_explorer.command`, can feed real usage (S3 storage,
+ELB LCUs, EC2/ElastiCache runtime-hours, data transfer) into the "actual" side and
+into the extrapolation for not-yet-deployed resources. bucksawz never calls Cost
+Explorer directly here — the command is your own aws-vault/SSO-wrapped query, printing
+JSON in the schema documented in `forecast_config.py`'s docstring.
 
 ## Usage reference
 
