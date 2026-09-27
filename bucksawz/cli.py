@@ -485,6 +485,46 @@ def forecast(config_path, repo):
     click.echo(f"Run `bucksawz serve{' --repo ' + repo if repo else ''}` to view it.")
 
 
+@cli.command("combine-stacks")
+@click.option("--mode", type=click.Choice(["state", "plan"]), required=True,
+              help="state: `tofu show -json` (what's deployed). plan: `tofu plan` + `show -json` (what a full apply would give).")
+@click.option("--root", "root", default=".", show_default=True, help="Terramate repo root (where `terramate list` runs).")
+@click.option("--dir", "dirs", multiple=True,
+              help="Only stacks under this directory (repeatable), e.g. stacks/management or stacks/workloads/dev. Default: all.")
+@click.option("--tags", default=None, help="Only stacks with these tags (terramate --tags syntax).")
+@click.option("--no-tags", "no_tags", default=None, help="Skip stacks with these tags, e.g. not-ready.")
+@click.option("--parallel", default=4, show_default=True, help="Stacks processed at once.")
+@click.option("--skip-failed", is_flag=True, help="Warn and omit a failing stack instead of failing the whole run.")
+@click.option("--tofu-bin", default="tofu", show_default=True)
+@click.option("--account-profile", "account_profile_pairs", multiple=True,
+              help="PREFIX=PROFILE (repeatable), e.g. stacks/workloads/dev=dev. Runs that stack's tofu "
+                   "invocation under `aws-vault exec PROFILE --`; longest matching prefix wins. Needed for "
+                   "--mode plan (each account's own credentials), since there's no assume_role wiring -- "
+                   "see combine.py's docstring. Unmapped stacks run with ambient credentials.")
+@click.option("--aws-vault-bin", default="aws-vault", show_default=True)
+def combine_stacks_cmd(mode, root, dirs, tags, no_tags, parallel, skip_failed, tofu_bin, account_profile_pairs, aws_vault_bin):
+    """Combine `tofu show -json` from every Terramate stack into one JSON
+    document on stdout ({stack path: show json}), ready for
+    `price-state --input` or as a `forecast` actual/proposed command.
+
+    Only read-only tofu commands run (show; plan with -lock=false), and each
+    stack must already be initialised. Progress goes to stderr.
+    """
+    from .combine import CombineError, combine_stacks, parse_account_profiles
+
+    try:
+        account_profiles = parse_account_profiles(list(account_profile_pairs))
+        combined = combine_stacks(
+            root, mode, dirs=list(dirs), tags=tags, no_tags=no_tags, parallel=parallel,
+            skip_failed=skip_failed, tofu_bin=tofu_bin, account_profiles=account_profiles,
+            aws_vault_bin=aws_vault_bin,
+        )
+    except CombineError as e:
+        click.echo(str(e), err=True)
+        raise SystemExit(1)
+    click.echo(json.dumps(combined))
+
+
 @cli.command("serve")
 @click.option(
     "--dir", "serve_dir", default=None,

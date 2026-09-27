@@ -12,7 +12,8 @@ from typing import Optional
 
 from . import db as price_db
 from .tf_state import (
-    TFResource, detect_format, parse_raw_flat, parse_raw_multi_stack, parse_raw_state, parse_state,
+    TFResource, _region_map_from_configuration, detect_format, parse_raw_flat, parse_raw_multi_stack,
+    parse_raw_state, parse_state,
 )
 from ..schema.infracost import Breakdown, CostComponent, InfracostOutput, Project, Resource
 
@@ -2822,6 +2823,12 @@ def price_terraform_json(data: dict, region: str) -> InfracostOutput:
     independently-generated datasets instead, see `find_new_resources`).
     """
     fmt = detect_format(data)
+    if fmt == "multi_stack_show":
+        priced_by_stack = {
+            stack: price_resources(parse_state(d, _region_map_from_configuration(d)), region)
+            for stack, d in data.items()
+        }
+        return build_multi_project_output(priced_by_stack)
     if fmt in ("raw_multi_stack", "raw_flat"):
         by_stack = parse_raw_multi_stack(data) if fmt == "raw_multi_stack" else parse_raw_flat(data)
         priced_by_stack = {stack: price_resources(tfs, region) for stack, tfs in by_stack.items()}

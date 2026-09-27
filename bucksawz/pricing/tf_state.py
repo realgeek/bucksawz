@@ -208,12 +208,18 @@ def parse_raw_flat(entries: list[dict]) -> dict[str, list[TFResource]]:
     return {stack: parse_raw_state({"resources": resources}) for stack, resources in grouped.items()}
 
 
+def _is_show_json(d: dict) -> bool:
+    return "format_version" in d or "values" in d or "planned_values" in d or "resource_changes" in d
+
+
 def detect_format(data: Any) -> str:
     """
     One of: "show_json" (plan/state via `terraform show -json`), "raw_state"
     (a single raw tfstate export), "raw_multi_stack" (combined.json: a dict
     of stack path -> raw tfstate), "raw_flat" (combined_flat.json: a flat
-    list of raw-state resource blocks tagged with `_stack`), or "unknown".
+    list of raw-state resource blocks tagged with `_stack`), "multi_stack_show"
+    (`bucksawz combine-stacks` output: a dict of stack path -> `terraform show
+    -json` plan/state), or "unknown".
     """
     if isinstance(data, list):
         return "raw_flat"
@@ -224,6 +230,8 @@ def detect_format(data: Any) -> str:
             return "raw_state"
         if data and all(isinstance(v, dict) and "resources" in v for v in data.values()):
             return "raw_multi_stack"
+        if data and all(isinstance(v, dict) and _is_show_json(v) for v in data.values()):
+            return "multi_stack_show"
     return "unknown"
 
 
